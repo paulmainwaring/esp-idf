@@ -179,7 +179,7 @@ void dhcps_delete(dhcps_t *dhcps)
             dhcps->state = DHCPS_HANDLE_DELETE_PENDING;
         } else {
             // otherwise, we're free to delete the handle immediately
-            free(dhcps);
+            mem_free(dhcps);
         }
     }
 }
@@ -1064,12 +1064,12 @@ POOL_CHECK:
         if ((dhcps->client_address.addr > dhcps->dhcps_poll.end_ip.addr) || (ip4_addr_isany(&dhcps->client_address))) {
             if (pnode != NULL) {
                 node_remove_from_list(&dhcps->plist, pnode);
-                free(pnode);
+                mem_free(pnode);
                 pnode = NULL;
             }
 
             if (pdhcps_pool != NULL) {
-                free(pdhcps_pool);
+                mem_free(pdhcps_pool);
                 pdhcps_pool = NULL;
             }
 
@@ -1081,12 +1081,12 @@ POOL_CHECK:
         if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK || ret ==  DHCPS_STATE_DECLINE) {
             if (pnode != NULL) {
                 node_remove_from_list(&dhcps->plist, pnode);
-                free(pnode);
+                mem_free(pnode);
                 pnode = NULL;
             }
 
             if (pdhcps_pool != NULL) {
-                free(pdhcps_pool);
+                mem_free(pdhcps_pool);
                 pdhcps_pool = NULL;
             }
 
@@ -1235,7 +1235,7 @@ static void handle_dhcp(void *arg,
     DHCPS_LOG("dhcps: handle_dhcp-> pbuf_free(p)\n");
 #endif
     pbuf_free(p);
-    free(pmsg_dhcps);
+    mem_free(pmsg_dhcps);
     pmsg_dhcps = NULL;
 }
 
@@ -1388,9 +1388,9 @@ err_t dhcps_stop(dhcps_t *dhcps, struct netif *netif)
         pback_node = pnode;
         pnode = pback_node->pnext;
         node_remove_from_list(&dhcps->plist, pback_node);
-        free(pback_node->pnode);
+        mem_free(pback_node->pnode);
         pback_node->pnode = NULL;
-        free(pback_node);
+        mem_free(pback_node);
         pback_node = NULL;
     }
     sys_untimeout(dhcps_tmr, dhcps);
@@ -1432,9 +1432,9 @@ static void kill_oldest_dhcps_pool(dhcps_t *dhcps)
     } else {
         minpre->pnext = minp->pnext;
     }
-    free(minp->pnode);
+    mem_free(minp->pnode);
     minp->pnode = NULL;
-    free(minp);
+    mem_free(minp);
     minp = NULL;
 }
 
@@ -1449,7 +1449,7 @@ static void dhcps_tmr(void *arg)
     dhcps_t *dhcps = arg;
     dhcps_handle_state state = dhcps->state;
     if (state == DHCPS_HANDLE_DELETE_PENDING) {
-        free(dhcps);
+        mem_free(dhcps);
         return;
     }
 
@@ -1471,9 +1471,9 @@ static void dhcps_tmr(void *arg)
             pback_node = pnode;
             pnode = pback_node->pnext;
             node_remove_from_list(&dhcps->plist, pback_node);
-            free(pback_node->pnode);
+            mem_free(pback_node->pnode);
             pback_node->pnode = NULL;
-            free(pback_node);
+            mem_free(pback_node);
             pback_node = NULL;
         } else {
             pnode = pnode ->pnext;
