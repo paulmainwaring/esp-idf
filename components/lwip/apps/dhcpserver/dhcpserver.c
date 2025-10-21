@@ -63,7 +63,9 @@
 #define DHCP_OPTION_END         255
 
 //#define USE_CLASS_B_NET 1
+#ifndef DHCPS_DEBUG
 #define DHCPS_DEBUG          0
+#endif
 #define DHCPS_LOG printf
 
 #define IS_INVALID_SUBNET_MASK(x)  (((x-1) | x) != 0xFFFFFFFF)
@@ -846,7 +848,9 @@ static void send_ack(dhcps_t *dhcps, struct dhcps_msg *m, u16_t len)
 #endif
 
     if (SendAck_err_t == ERR_OK) {
-        dhcps->dhcps_cb(dhcps->dhcps_cb_arg, m->yiaddr, m->chaddr);
+        if (dhcps->dhcps_cb) {
+            dhcps->dhcps_cb(dhcps->dhcps_cb_arg, m->yiaddr, m->chaddr);
+        }
     }
 
     if (p->ref != 0) {
