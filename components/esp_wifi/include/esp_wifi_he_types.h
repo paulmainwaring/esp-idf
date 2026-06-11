@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 #define FLOW_ID_ALL                  (8)
+#define BTWT_ID_ALL                  (32)
 #define BSS_MAX_COLOR                (63)
 
 /**
@@ -54,7 +55,8 @@ typedef struct {
                                                  1- acquire the complete HE-LTF2
                                                  2- sample evenly among the HE-LTF1 and HE-LTF2 */
     uint32_t val_scale_cfg : 2;             /**< value 0-3 */
-    uint32_t reserved : 20;                 /**< reserved */
+    uint32_t dump_ack_en : 1;               /**< enable to dump 802.11 ACK frame, default disabled */
+    uint32_t reserved : 19;                 /**< reserved */
 } wifi_csi_acquire_config_t;
 
 /**
@@ -92,23 +94,37 @@ typedef enum {
 } wifi_twt_setup_cmds_t;
 
 /**
-  * @brief TWT setup config
+  * @brief broadcast TWT setup config
+  */
+typedef struct {
+    wifi_twt_setup_cmds_t setup_cmd;   /**< Indicates the type of TWT command*/
+    uint8_t btwt_id;                  /**< When set up an broadcast TWT agreement, the broadcast twt id will be assigned by AP after a successful agreement setup.
+                                         broadcast twt id could be specified to a value in the range of [1, 31], but it might be change by AP in the response.
+                                         When change TWT parameters of the existing TWT agreement, broadcast twt id should be an existing one. The value range is [1, 31].*/
+    uint16_t timeout_time_ms;         /**< Timeout times of receiving setup action frame response, default 5s*/
+} wifi_btwt_setup_config_t;
+
+/**
+  * @brief Individual TWT setup config
   */
 typedef struct
 {
     wifi_twt_setup_cmds_t setup_cmd;    /**< Indicates the type of TWT command */
-    uint16_t trigger :1;                /**< 1: a trigger-enabled TWT, 0: a non-trigger-enabled TWT */
-    uint16_t flow_type :1;              /**< 0: an announced TWT, 1: an unannounced TWT */
-    uint16_t flow_id :3;                /**< When set up an individual TWT agreement, the flow id will be assigned by AP after a successful agreement setup.
+    uint16_t trigger : 1;               /**< 1: a trigger-enabled individual TWT, 0: a non-trigger-enabled individual TWT */
+    uint16_t flow_type : 1;             /**< 0: an announced individual TWT, 1: an unannounced individual TWT */
+    uint16_t flow_id : 3;                /**< When set up an individual TWT agreement, the flow id will be assigned by AP after a successful agreement setup.
                                              flow_id could be specified to a value in the range of [0, 7], but it might be changed by AP in the response.
                                              When change TWT parameters of the existing TWT agreement, flow_id should be an existing one. The value range is [0, 7]. */
-    uint16_t wake_invl_expn :5;         /**< TWT Wake Interval Exponent. The value range is [0, 31]. */
-    uint16_t reserved :6;               /**< bit: 10.15 reserved */
-    uint8_t min_wake_dura;              /**< Nominal Minimum Wake Duration, indicates the minimum amount of time, in unit of 256 us, that the TWT requesting STA expects that it needs to be awake. The value range is [1, 255]. */
-    uint16_t wake_invl_mant;            /**< TWT Wake Interval Mantissa. The value range is [1, 65535]. */
-    uint16_t twt_id;                    /**< TWT connection id, the value range is [0, 32767]. */
+    uint16_t wake_invl_expn : 5;        /**< Individual TWT Wake Interval Exponent. The value range is [0, 31]. */
+    uint16_t wake_duration_unit : 1;    /**< Individual TWT Wake duration unit, 0: 256us 1: TU (TU = 1024us)*/
+    uint16_t reserved : 5;              /**< bit: 11.15 reserved */
+    uint8_t min_wake_dura;              /**< Nominal Minimum Wake Duration, indicates the minimum amount of time, in unit of 256 us, that the individual TWT requesting STA expects that it needs to be awake. The value range is [1, 255]. */
+    uint16_t wake_invl_mant;            /**< Individual TWT Wake Interval Mantissa. The value range is [1, 65535]. */
+    uint16_t twt_id;                    /**< Individual TWT connection id, the value range is [0, 32767]. */
     uint16_t timeout_time_ms;           /**< Timeout times of receiving setup action frame response, default 5s*/
 } wifi_twt_setup_config_t;
+
+typedef wifi_twt_setup_config_t wifi_itwt_setup_config_t;
 
 /**
   * @brief HE SU GI and LTF types
@@ -156,13 +172,12 @@ typedef struct {
     unsigned : 15;                                /**< reserved */
     unsigned : 15;                                /**< reserved */
     unsigned : 2;                                 /**< reserved */
-    unsigned noise_floor : 8;                     /**< the noise floor of the reception frame */
-    signed data_rssi : 8;                         /**< the RSSI of the DATA field */
-    unsigned : 8;                                 /**< reserved */
-    unsigned : 8;                                 /**< reserved */
+    signed noise_floor : 8;                       /**< the noise floor of the reception frame */
     unsigned channel : 4;                         /**< the primary channel */
     unsigned second : 4;                          /**< the second channel if in HT40 */
-    unsigned : 24;                                /**< reserved */
+    unsigned : 8;                                 /**< reserved */
+    unsigned : 8;                                 /**< reserved */
+    unsigned : 32;                                /**< reserved */
     unsigned : 32;                                /**< reserved */
     unsigned : 2;                                 /**< reserved */
     unsigned : 4;                                 /**< reserved */
@@ -202,16 +217,67 @@ typedef struct {
     unsigned : 24;                                /**< reserved */
 } __attribute__((packed)) esp_wifi_rxctrl_t;
 
+/**
+  * @brief bTWT setup status
+  */
+typedef enum {
+    BTWT_SETUP_TXFAIL,       /**< station sends btwt setup request frame fail */
+    BTWT_SETUP_SUCCESS,      /**< station receives btwt setup response frame and setup btwt sucessfully */
+    BTWT_SETUP_TIMEOUT,      /**< timeout of receiving btwt setup response frame */
+    BTWT_SETUP_FULL,         /**< indicate there is no available btwt id */
+    BTWT_SETUP_INVALID_ARG,  /**< indicate invalid argument to setup btwt */
+    BTWT_SETUP_INTERNAL_ERR, /**< indicate internal error to setup btwt */
+} wifi_btwt_setup_status_t;
+
 /** Argument structure for WIFI_EVENT_TWT_SET_UP event */
 typedef struct {
-    wifi_twt_setup_config_t config;       /**< itwt setup config*/
-    esp_err_t status;                     /**< 1: indicate tx success, others : indicate tx fail */
+    wifi_itwt_setup_config_t config;      /**< itwt setup config, this value is determined by the AP */
+    esp_err_t status;                     /**< itwt setup status, 1: indicate setup success, others : indicate setup fail */
+    uint8_t reason;                       /**< itwt setup frame tx fail reason */
+    uint64_t target_wake_time;            /**< TWT SP start time */
 } wifi_event_sta_itwt_setup_t;
+
+/**
+  * @brief iTWT teardown status
+  */
+typedef enum {
+    ITWT_TEARDOWN_FAIL,               /**< station sends teardown frame fail */
+    ITWT_TEARDOWN_SUCCESS,            /**< 1) station successfully sends teardown frame to AP; 2) station receives teardown frame from AP */
+} wifi_itwt_teardown_status_t;
 
 /** Argument structure for WIFI_EVENT_TWT_TEARDOWN event */
 typedef struct {
     uint8_t flow_id;                     /**< flow id */
+    wifi_itwt_teardown_status_t status;  /**< itwt teardown status */
 } wifi_event_sta_itwt_teardown_t;
+
+/** Argument structure for WIFI_EVENT_BTWT_SET_UP event */
+typedef struct {
+    wifi_btwt_setup_status_t status; /**< indicate btwt setup status */
+    wifi_twt_setup_cmds_t setup_cmd; /**< indicate the type of TWT command */
+    uint8_t btwt_id;                 /**< indicate btwt id */
+    uint8_t min_wake_dura;           /**< Nominal Minimum Wake Duration, indicates the minimum amount of time, in unit of 256 us, that the TWT requesting STA expects that it needs to be awake. The value range is [1, 255]. */
+    uint8_t wake_invl_expn;          /**< TWT Wake Interval Exponent. The value range is [0, 31]. */
+    uint16_t wake_invl_mant;         /**< TWT Wake Interval Mantissa. The value range is [1, 65535]. */
+    bool trigger;                    /**< 1: a trigger-enabled TWT, 0: a non-trigger-enabled TWT */
+    uint8_t flow_type;               /**< 0: an announced TWT, 1: an unannounced TWT */
+    uint8_t reason;                  /**< btwt setup frame tx fail reason */
+    uint64_t target_wake_time;       /**< TWT SP start time */
+} wifi_event_sta_btwt_setup_t;
+
+/**
+  * @brief BTWT teardown status
+  */
+typedef enum {
+    BTWT_TEARDOWN_FAIL,    /**< station sends teardown frame fail */
+    BTWT_TEARDOWN_SUCCESS, /**< 1) station successfully sends teardown frame to AP; 2) station receives teardown frame from AP */
+} wifi_btwt_teardown_status_t;
+
+/** Argument structure for WIFI_EVENT_TWT_TEARDOWN event */
+typedef struct {
+    uint8_t btwt_id;                    /**< btwt id */
+    wifi_btwt_teardown_status_t status; /**< btwt teardown status */
+} wifi_event_sta_btwt_teardown_t;
 
 /**
   * @brief iTWT probe status
@@ -236,6 +302,41 @@ typedef struct {
     uint8_t flow_id_bitmap;              /**< bitmap of the suspended flow id */
     uint32_t actual_suspend_time_ms[8];  /**< the actual suspend time for each flow id, unit: ms */
 } wifi_event_sta_itwt_suspend_t;
+
+/**
+  * @brief TWT types
+  */
+typedef enum {
+    TWT_TYPE_INDIVIDUAL,                 /**< individual twt */
+    TWT_TYPE_BROADCAST,                  /**< broadcast twt */
+    TWT_TYPE_MAX,                        /**< the max value */
+} wifi_twt_type_t;
+
+/** Argument structure for twt configuration */
+typedef struct {
+    bool post_wakeup_event;              /**< post twt wakeup event */
+} wifi_twt_config_t;
+
+/** Argument structure for WIFI_EVENT_TWT_WAKEUP event */
+typedef struct {
+    wifi_twt_type_t twt_type;           /**< twt type */
+    uint8_t flow_id;                    /**< flow id */
+} wifi_event_sta_twt_wakeup_t;
+
+/** Argument structure for twt information */
+typedef struct {
+    bool btwt_id_in_use;                      /**< indicate whether the btwt id is in use or not */
+    uint16_t btwt_trigger : 1;                /**< 1: a trigger-enabled TWT, 0: a non-trigger-enabled TWT */
+    uint16_t btwt_flow_type : 1;              /**< 0: an announced TWT, 1: an unannounced TWT */
+    uint16_t btwt_recommendation : 3;         /**< indicate recommendations on the types of frames. 0: no constraints, [1, 3], [4, 7] reserved */
+    uint16_t btwt_wake_interval_exponent : 5; /**< TWT Wake Interval Exponent. The value range is [0, 31]. */
+    uint16_t btwt_rsvd : 6;                   /**< reserved */
+    uint8_t btwt_wake_duration;               /**< TWT Wake duration unit, 0: 256us 1: TU (TU = 1024us) */
+    uint16_t btwt_wake_interval_mantissa;     /**< TWT Wake Interval Mantissa. The value range is [1, 65535]. */
+    uint16_t btwt_info_id : 5;                /**< btwt id */
+    uint16_t btwt_info_persistence : 8;       /**< indicate the number of TBTTs during which the Broadcast TWT SPs corresponding to this broadcast TWT parameters set are present */
+    uint16_t btwt_info_rsvd : 3;              /**< reserved */
+} esp_wifi_btwt_info_t;
 
 #ifdef __cplusplus
 }

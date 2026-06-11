@@ -26,8 +26,8 @@ extern "C" {
 #define NDP_STATUS_REJECTED     2
 
 #define NAN_MAX_PEERS_RECORD    15
-#define ESP_NAN_PUBLISH         1
-#define ESP_NAN_SUBSCRIBE       2
+#define ESP_NAN_PUBLISH         2
+#define ESP_NAN_SUBSCRIBE       1
 
 /** Parameters of a peer service record */
 struct nan_peer_record {
@@ -128,7 +128,7 @@ uint8_t esp_wifi_nan_datapath_req(wifi_nan_datapath_req_t *req);
 /**
   * @brief      Respond to a NAN Datapath request with Accept or Reject
   *
-  * @attention  This API should be called if ndp_auto_accept is not set True by the Publisher and
+  * @attention  This API should be called if ndp_resp_needed is set True by the Publisher and
   *             a WIFI_EVENT_NDP_INDICATION event is received due to an incoming NDP request.
   *
   * @param      resp  NAN Datapath Response parameters.
@@ -160,6 +160,8 @@ void esp_wifi_nan_get_ipv6_linklocal_from_mac(ip6_addr_t *ip6, uint8_t *mac_addr
 
 /**
  * brief         Get own Service information from Service ID OR Name.
+ *
+ * @attention    If service information is to be fetched from service name, set own_svc_id as zero.
  *
  * @param[inout] own_svc_id As input, it indicates Service ID to search for.
  *                          As output, it indicates Service ID of the service found using Service Name.
