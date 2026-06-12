@@ -6,6 +6,15 @@ else()
     set(linker_fragments linker.lf)
 endif()
 
+if( NOT CONFIG_ESP_WIFI_ENABLED
+    AND NOT CONFIG_ESP_HOST_WIFI_ENABLED
+    AND NOT CMAKE_BUILD_EARLY_EXPANSION )
+    # This component provides only "esp_supplicant" headers if WiFi not enabled
+    # (implementation supported optionally in a managed component esp_wifi_remote)
+    idf_component_register(INCLUDE_DIRS include port/include esp_supplicant/include)
+    return()
+endif()
+
 set(srcs "port/os_xtensa.c"
     "port/eloop.c"
     "src/ap/ap_config.c"
@@ -110,6 +119,9 @@ if(CONFIG_ESP_WIFI_MBEDTLS_CRYPTO)
     "esp_supplicant/src/crypto/crypto_mbedtls-bignum.c"
     "esp_supplicant/src/crypto/crypto_mbedtls-rsa.c"
     "esp_supplicant/src/crypto/crypto_mbedtls-ec.c")
+    if(NOT CONFIG_IDF_TARGET_ESP32)
+        list(APPEND crypto_src "esp_supplicant/src/crypto/fastpsk.c")
+    endif()
     # Add internal RC4 as RC4 has been removed from mbedtls
     set(crypto_src ${crypto_src} "src/crypto/rc4.c")
     if(NOT CONFIG_MBEDTLS_DES_C)
@@ -165,8 +177,11 @@ endif()
 if(CONFIG_ESP_WIFI_11KV_SUPPORT OR CONFIG_ESP_WIFI_11R_SUPPORT)
     set(roaming_src
     "src/common/ieee802_11_common.c")
-    if(CONFIG_ESP_WIFI_11KV_SUPPORT)
-        set(roaming_src ${roaming_src} "src/common/rrm.c" "src/common/wnm_sta.c")
+    if(CONFIG_ESP_WIFI_RRM_SUPPORT)
+        set(roaming_src ${roaming_src} "src/common/rrm.c")
+    endif()
+    if(CONFIG_ESP_WIFI_WNM_SUPPORT)
+        set(roaming_src ${roaming_src} "src/common/wnm_sta.c")
     endif()
     if(CONFIG_ESP_WIFI_11R_SUPPORT)
         set(roaming_src ${roaming_src} "src/rsn_supp/wpa_ft.c")
@@ -274,7 +289,13 @@ if(CONFIG_ESP_WIFI_DPP_SUPPORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_DPP)
 endif()
 if(CONFIG_ESP_WIFI_11KV_SUPPORT)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_SUPPLICANT_TASK CONFIG_WNM CONFIG_RRM CONFIG_IEEE80211KV)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_IEEE80211KV)
+endif()
+if(CONFIG_ESP_WIFI_RRM_SUPPORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_RRM)
+endif()
+if(CONFIG_ESP_WIFI_WNM_SUPPORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_WNM)
 endif()
 if(CONFIG_ESP_WIFI_11R_SUPPORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_IEEE80211R)

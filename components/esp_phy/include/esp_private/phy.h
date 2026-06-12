@@ -1,10 +1,11 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #pragma once
+#include "sdkconfig.h"
 #include "esp_phy_init.h"
 
 #ifdef __cplusplus
@@ -12,6 +13,7 @@ extern "C" {
 #endif
 
 #define ESP_CAL_DATA_CHECK_FAIL 1
+#define ESP_MODEM_RF_FLAG_UPDATE_CB_REQUIRED (SOC_PM_MODEM_RF_FLAG_UPDATE_WORKAROUND || CONFIG_ESP_WIFI_MODEM_RF_FLAG_UPDATE_DEBUG)
 
 typedef enum {
     PHY_I2C_MST_CMD_TYPE_OFF = 0,
@@ -41,7 +43,7 @@ void phy_get_romfunc_addr(void);
  * @param[in] init_data Initialization parameters to be used by the PHY
  * @param[inout] cal_data As input, calibration data previously obtained. As output, will contain new calibration data.
  * @param[in] cal_mode  RF calibration mode
- * @return ESP_CAL_DATA_CHECK_FAIL if calibration data checksum fails, other values are reserved for future use
+ * @return ESP_CAL_DATA_CHECK_FAIL if the calibration data checksum fails or if the calibration data is outdated, other values are reserved for future use
  */
 int register_chipv7_phy(const esp_phy_init_data_t* init_data, esp_phy_calibration_data_t *cal_data, esp_phy_calibration_mode_t cal_mode);
 
@@ -180,6 +182,27 @@ _lock_t phy_get_lock(void);
  *
  */
 void phy_track_pll(void);
+
+#if CONFIG_ESP_WIFI_ENHANCED_LIGHT_SLEEP
+/**
+ * @brief On sleep->modem->active wakeup process, since RF has been turned on by hardware in
+ *        modem state, `sleep_modem_wifi_do_phy_retention` and `phy_wakeup_init` will be skipped
+ *        in `esp_phy_enable`, but there are still some configurations that need to be restored
+ *        by software, which are packed in this function.
+ */
+void phy_wakeup_from_modem_state_extra_init(void);
+#endif
+
+#if SOC_PM_SUPPORT_PMU_MODEM_STATE && CONFIG_ESP_WIFI_ENHANCED_LIGHT_SLEEP && ESP_MODEM_RF_FLAG_UPDATE_CB_REQUIRED
+/**
+ * @brief Update modem RF flag
+ *
+ * This function is called as a callback during MAC/BB power down operations.
+ * It checks if modem RF is already enabled and clears the RF power state accordingly.
+ */
+void esp_phy_modem_rf_flag_update(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

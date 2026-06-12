@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -40,15 +40,11 @@ struct action_rx_param {
 
 static int esp_dpp_post_evt(uint32_t evt_id, uint32_t data)
 {
-    dpp_event_t *evt = os_zalloc(sizeof(dpp_event_t));
-    int ret = ESP_OK;
+    dpp_event_t evt;
+    esp_err_t ret = ESP_OK;
 
-    if (evt == NULL) {
-        ret = ESP_ERR_NO_MEM;
-        goto end;
-    }
-    evt->id = evt_id;
-    evt->data = data;
+    evt.id = evt_id;
+    evt.data = data;
     if (s_dpp_api_lock) {
         DPP_API_LOCK();
     } else {
@@ -67,10 +63,7 @@ static int esp_dpp_post_evt(uint32_t evt_id, uint32_t data)
 
     return ret;
 end:
-    if (evt) {
-        os_free(evt);
-    }
-    wpa_printf(MSG_ERROR,"DPP: Failed to send event %d to DPP task", evt_id);
+    wpa_printf(MSG_ERROR, "DPP: Failed to send event %d to DPP task", evt_id);
     return ret;
 }
 
@@ -316,21 +309,31 @@ static void gas_query_resp_rx(struct action_rx_param *rx_param)
 {
     struct dpp_authentication *auth = s_dpp_ctx.dpp_auth;
     uint8_t *pos = rx_param->action_frm->u.public_action.v.pa_gas_resp.data;
-    uint8_t *resp = &pos[10];
+    uint8_t *resp = &pos[10]; /* first byte of DPP attributes */
+    size_t vendor_len = rx_param->vendor_data_len;
     int i, res;
 
-    if (pos[1] == WLAN_EID_VENDOR_SPECIFIC && pos[2] == 5 &&
-            WPA_GET_BE24(&pos[3]) == OUI_WFA && pos[6] == 0x1a && pos[7] == 1 && auth) {
-        if (dpp_conf_resp_rx(auth, resp, rx_param->vendor_data_len - 2) < 0) {
-            wpa_printf(MSG_DEBUG, "DPP: Configuration attempt failed");
-            goto fail;
-        }
+    /* Basic structural checks on the Advertisement Protocol payload */
+    if (!(pos[1] == WLAN_EID_VENDOR_SPECIFIC && pos[2] == 5 &&
+            WPA_GET_BE24(&pos[3]) == OUI_WFA && pos[6] == 0x1a && pos[7] == 1 && auth)) {
+        wpa_hexdump(MSG_INFO, "DPP: Failed, Configuration Response adv_proto", pos, 8);
+        return;
+    }
 
-        for (i = 0; i < auth->num_conf_obj; i++) {
-            res = esp_dpp_handle_config_obj(auth, &auth->conf_obj[i]);
-            if (res < 0) {
-                goto fail;
-            }
+    /* DPP attribute length = vendor_data_len - 2, caller validated vendor_data_len
+     * (we skip the 2-byte length field and pass only the attributes). */
+    size_t dpp_data_len = vendor_len - 2;
+
+    if (dpp_conf_resp_rx(auth, resp, dpp_data_len) < 0) {
+        wpa_printf(MSG_INFO, "DPP: Configuration attempt failed");
+        goto fail;
+    }
+
+    for (i = 0; i < auth->num_conf_obj; i++) {
+        res = esp_dpp_handle_config_obj(auth, &auth->conf_obj[i]);
+        if (res < 0) {
+            wpa_printf(MSG_INFO, "DPP: Configuration parsing failed");
+            goto fail;
         }
     }
 
@@ -381,17 +384,16 @@ static void esp_dpp_rx_action(struct action_rx_param *rx_param)
 
 static void esp_dpp_task(void *pvParameters )
 {
-    dpp_event_t *evt;
+    dpp_event_t evt;
     bool task_del = false;
 
     for (;;) {
         if (os_queue_recv(s_dpp_evt_queue, &evt, OS_BLOCK) == TRUE) {
-            if (evt->id >= SIG_DPP_MAX) {
-                os_free(evt);
+            if (evt.id >= SIG_DPP_MAX) {
                 continue;
             }
 
-            switch (evt->id) {
+            switch (evt.id) {
             case SIG_DPP_DEL_TASK:
                 struct dpp_bootstrap_params_t *params = &s_dpp_ctx.bootstrap_params;
                 eloop_cancel_timeout(esp_dpp_auth_conf_wait_timeout, NULL, NULL);
@@ -412,7 +414,7 @@ static void esp_dpp_task(void *pvParameters )
                 break;
 
             case SIG_DPP_BOOTSTRAP_GEN: {
-                char *command = (char *)evt->data;
+                char *command = (char *)evt.data;
                 const char *uri;
 
                 s_dpp_ctx.id = dpp_bootstrap_gen(s_dpp_ctx.dpp_global, command);
@@ -424,7 +426,7 @@ static void esp_dpp_task(void *pvParameters )
             break;
 
             case SIG_DPP_RX_ACTION: {
-                esp_dpp_rx_action((struct action_rx_param *)evt->data);
+                esp_dpp_rx_action((struct action_rx_param *)evt.data);
             }
             break;
 
@@ -462,8 +464,6 @@ static void esp_dpp_task(void *pvParameters )
                 break;
             }
 
-            os_free(evt);
-
             if (task_del) {
                 break;
             }
@@ -474,7 +474,7 @@ static void esp_dpp_task(void *pvParameters )
     s_dpp_evt_queue = NULL;
 
     if (s_dpp_api_lock) {
-        os_semphr_delete(s_dpp_api_lock);
+        os_mutex_delete(s_dpp_api_lock);
         s_dpp_api_lock = NULL;
     }
 

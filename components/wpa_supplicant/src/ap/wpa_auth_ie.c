@@ -86,7 +86,7 @@ static int wpa_write_wpa_ie(struct wpa_auth_config *conf, u8 *buf, size_t len)
 
 
 int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
-		     const u8 *pmkid)
+		     const u8 *pmkid, int group_mgmt_cipher)
 {
 	struct rsn_ie_hdr *hdr;
 	int num_suites, res;
@@ -191,6 +191,11 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
 		pos += RSN_SELECTOR_LEN;
 		num_suites++;
 	}
+        if (conf->wpa_key_mgmt & WPA_KEY_MGMT_SAE_EXT_KEY) {
+                RSN_SELECTOR_PUT(pos, RSN_AUTH_KEY_MGMT_SAE_EXT_KEY);
+                pos += RSN_SELECTOR_LEN;
+                num_suites++;
+        }
 	if (conf->wpa_key_mgmt & WPA_KEY_MGMT_FT_SAE) {
 		RSN_SELECTOR_PUT(pos, RSN_AUTH_KEY_MGMT_FT_SAE);
 		pos += RSN_SELECTOR_LEN;
@@ -265,8 +270,20 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
 		}
 
 		/* Management Group Cipher Suite */
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_AES_128_CMAC);
-		pos += RSN_SELECTOR_LEN;
+                switch (group_mgmt_cipher) {
+                case WPA_CIPHER_AES_128_CMAC:
+                    RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_AES_128_CMAC);
+                    break;
+                case WPA_CIPHER_BIP_GMAC_128:
+                    RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_BIP_GMAC_128);
+                    break;
+                case WPA_CIPHER_BIP_GMAC_256:
+                    RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_BIP_GMAC_256);
+                    break;
+                default:
+                    RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_AES_128_CMAC);
+                }
+                pos += RSN_SELECTOR_LEN;
 	}
 #endif /* CONFIG_IEEE80211W */
 
@@ -335,7 +352,7 @@ int wpa_auth_gen_wpa_ie(struct wpa_authenticator *wpa_auth)
 
 	if (wpa_auth->conf.wpa & WPA_PROTO_RSN) {
 		res = wpa_write_rsn_ie(&wpa_auth->conf,
-				       pos, buf + sizeof(buf) - pos, NULL);
+				       pos, buf + sizeof(buf) - pos, NULL, wpa_auth->conf.group_mgmt_cipher);
 		if (res < 0)
 			return res;
 		pos += res;
@@ -387,6 +404,7 @@ u8 * wpa_add_kde(u8 *pos, u32 kde, const u8 *data, size_t data_len,
 	}
 	return pos;
 }
+
 
 enum wpa_validate_result
 wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
@@ -442,6 +460,8 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
 #ifdef CONFIG_SAE
 		else if (data.key_mgmt & WPA_KEY_MGMT_SAE)
 			selector = RSN_AUTH_KEY_MGMT_SAE;
+                else if (data.key_mgmt & WPA_KEY_MGMT_SAE_EXT_KEY)
+                        selector = RSN_AUTH_KEY_MGMT_SAE_EXT_KEY;
 		else if (data.key_mgmt & WPA_KEY_MGMT_FT_SAE)
 			selector = RSN_AUTH_KEY_MGMT_FT_SAE;
 #endif /* CONFIG_SAE */
@@ -517,6 +537,8 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
 #ifdef CONFIG_SAE
 	else if (key_mgmt & WPA_KEY_MGMT_SAE)
 		sm->wpa_key_mgmt = WPA_KEY_MGMT_SAE;
+        else if (key_mgmt & WPA_KEY_MGMT_SAE_EXT_KEY)
+                sm->wpa_key_mgmt = WPA_KEY_MGMT_SAE_EXT_KEY;
 	else if (key_mgmt & WPA_KEY_MGMT_FT_SAE)
 		sm->wpa_key_mgmt = WPA_KEY_MGMT_FT_SAE;
 #endif /* CONFIG_SAE */
@@ -562,13 +584,23 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
 				   "cannot use TKIP");
 			return WPA_MGMT_FRAME_PROTECTION_VIOLATION;
 		}
-
-		if (data.mgmt_group_cipher != WPA_CIPHER_AES_128_CMAC) {
+		if (!wpa_cipher_valid_mgmt_group(data.mgmt_group_cipher)) {
 			wpa_printf( MSG_DEBUG, "Unsupported management group "
 				   "cipher %d", data.mgmt_group_cipher);
 			return WPA_INVALID_MGMT_GROUP_CIPHER;
 		}
 	}
+
+#ifdef CONFIG_SAE
+	if (wpa_auth->conf.ieee80211w == MGMT_FRAME_PROTECTION_OPTIONAL &&
+	    wpa_auth->conf.sae_require_mfp &&
+	    wpa_key_mgmt_sae(sm->wpa_key_mgmt) &&
+	    !(data.capabilities & WPA_CAPABILITY_MFPC)) {
+		wpa_printf(MSG_DEBUG,
+			   "Management frame protection required with SAE, but client did not enable it");
+		return WPA_MGMT_FRAME_PROTECTION_VIOLATION;
+	}
+#endif /* CONFIG_SAE */
 
 	if (wpa_auth->conf.ieee80211w == NO_MGMT_FRAME_PROTECTION ||
 	    !(data.capabilities & WPA_CAPABILITY_MFPC))
@@ -597,6 +629,8 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
 		sm->pairwise = WPA_CIPHER_CCMP;
 	else if (ciphers & WPA_CIPHER_GCMP)
 		sm->pairwise = WPA_CIPHER_GCMP;
+        else if (ciphers & WPA_CIPHER_GCMP_256)
+                sm->pairwise = WPA_CIPHER_GCMP_256;
 	else
 		sm->pairwise = WPA_CIPHER_TKIP;
 
@@ -623,7 +657,7 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
 	}
 
 #ifdef CONFIG_SAE
-	if (sm->wpa_key_mgmt == WPA_KEY_MGMT_SAE && data.num_pmkid &&
+	if ((sm->wpa_key_mgmt == WPA_KEY_MGMT_SAE || sm->wpa_key_mgmt == WPA_KEY_MGMT_SAE_EXT_KEY) && data.num_pmkid &&
 		!sm->pmksa) {
 		wpa_printf(MSG_DEBUG, "No PMKSA cache entry found for SAE");
 		return WPA_INVALID_PMKID;

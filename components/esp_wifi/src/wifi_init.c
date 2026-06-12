@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -32,6 +32,10 @@
 
 #if SOC_PM_MODEM_RETENTION_BY_REGDMA
 #include "esp_private/sleep_retention.h"
+#endif
+
+#if SOC_MODEM_CLOCK_IS_INDEPENDENT
+#include "esp_private/esp_modem_clock.h"
 #endif
 
 static bool s_wifi_inited = false;
@@ -216,10 +220,18 @@ static esp_err_t wifi_deinit_internal(void)
 #if CONFIG_ESP_WIFI_ENHANCED_LIGHT_SLEEP
     esp_wifi_internal_modem_state_configure(false);
     esp_pm_unregister_skip_light_sleep_callback(sleep_modem_wifi_modem_state_skip_light_sleep);
+#if ESP_MODEM_RF_FLAG_UPDATE_CB_REQUIRED
+    esp_unregister_mac_bb_pd_callback(esp_phy_modem_rf_flag_update);
 #endif
+#endif /* CONFIG_ESP_WIFI_ENHANCED_LIGHT_SLEEP */
+
     esp_phy_modem_deinit();
 
     s_wifi_inited = false;
+
+#if SOC_MODEM_CLOCK_IS_INDEPENDENT
+    modem_clock_configure_wifi_status(s_wifi_inited);
+#endif
 
     return err;
 }
@@ -401,6 +413,12 @@ esp_err_t esp_wifi_init(const wifi_init_config_t *config)
         if (sleep_modem_wifi_modem_state_enabled()) {
             esp_pm_register_skip_light_sleep_callback(sleep_modem_wifi_modem_state_skip_light_sleep);
             esp_wifi_internal_modem_state_configure(true); /* require WiFi to enable automatically receives the beacon */
+#if ESP_MODEM_RF_FLAG_UPDATE_CB_REQUIRED
+            if (esp_register_mac_bb_pd_callback(esp_phy_modem_rf_flag_update) != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to register modem RF flag update callback");
+                goto _deinit;
+            }
+#endif
         }
 #endif
 #if CONFIG_IDF_TARGET_ESP32
@@ -440,6 +458,10 @@ esp_err_t esp_wifi_init(const wifi_init_config_t *config)
 
     s_wifi_inited = true;
 
+#if SOC_MODEM_CLOCK_IS_INDEPENDENT
+    modem_clock_configure_wifi_status(s_wifi_inited);
+#endif
+
     return result;
 
 _deinit:
@@ -472,7 +494,12 @@ esp_err_t ieee80211_ftm_attach(void)
     /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
     return ESP_OK;
 }
-#endif
+
+void ftm_initiator_cleanup(void)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+#endif /* CONFIG_ESP_WIFI_FTM_ENABLE */
 
 #ifndef CONFIG_ESP_WIFI_SOFTAP_SUPPORT
 void net80211_softap_funcs_init(void)
@@ -548,7 +575,29 @@ void * ieee80211_alloc_proberesp(void *p, int arg)
     return NULL;
 }
 
-#endif
+bool hostap_query_mac_in_list(const uint8_t *p, int arg)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return false;
+}
+
+int hostap_add_in_mac_list(const uint8_t *p, int arg)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return 0;
+}
+
+int hostap_del_mac_info_from_list(const uint8_t *p, int arg)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return 0;
+}
+
+void create_new_bss_for_sa_query_failed_sta(uint8_t arg)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+#endif /* CONFIG_ESP_WIFI_SOFTAP_SUPPORT */
 
 #ifndef CONFIG_ESP_WIFI_NAN_ENABLE
 
@@ -575,4 +624,52 @@ void nan_sm_handle_event(void *p1, int p2)
     /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
 }
 
+int wifi_create_nan(void)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return 0;
+}
+
+int wifi_nan_set_config_local(wifi_nan_config_t *p)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return 0;
+}
+
+void nan_dp_post_tx(void *p1, void *p2)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+
+void nan_dp_delete_peer(void *p)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+
+void *nan_dp_search_node(const uint8_t *p)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+    return NULL;
+}
+
+void nan_ndp_resp_timeout_process(void *p)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+#endif /* CONFIG_ESP_WIFI_NAN_ENABLE */
+
+#if CONFIG_IDF_TARGET_ESP32C2
+#if CONFIG_ESP32C2_REV_MIN_FULL < 200
+void esp32c2_eco4_rom_ptr_init(void)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
+#endif
+#endif
+
+#ifndef CONFIG_ESP_WIFI_SLP_SAMPLE_BEACON_FEATURE
+void pm_beacon_offset_funcs_init(void)
+{
+    /* Do not remove, stub to overwrite weak link in Wi-Fi Lib */
+}
 #endif

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -201,6 +201,7 @@ static int set_ca_cert(tls_context_t *tls, const unsigned char *cacert, size_t c
 
 #ifdef CONFIG_SUITEB192
 static uint16_t tls_sig_algs_for_suiteb[] = {
+#if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA512_C)
 #if defined(MBEDTLS_ECDSA_C)
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG( MBEDTLS_SSL_SIG_ECDSA, MBEDTLS_SSL_HASH_SHA512 ),
@@ -211,6 +212,7 @@ static uint16_t tls_sig_algs_for_suiteb[] = {
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG( MBEDTLS_SSL_SIG_RSA, MBEDTLS_SSL_HASH_SHA384 ),
 #endif
 #endif /* MBEDTLS_SHA512_C */
+#endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
     MBEDTLS_TLS_SIG_NONE
 };
 
@@ -235,6 +237,7 @@ static void tls_set_suiteb_config(tls_context_t *tls)
 #endif
 
 static uint16_t tls_sig_algs_for_eap[] = {
+#if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA512_C)
 #if defined(MBEDTLS_ECDSA_C)
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG( MBEDTLS_SSL_SIG_ECDSA, MBEDTLS_SSL_HASH_SHA512 ),
@@ -263,6 +266,7 @@ static uint16_t tls_sig_algs_for_eap[] = {
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG( MBEDTLS_SSL_SIG_RSA, MBEDTLS_SSL_HASH_SHA1 ),
 #endif
 #endif /* MBEDTLS_SHA1_C */
+#endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
     MBEDTLS_TLS_SIG_NONE
 };
 
@@ -531,9 +535,15 @@ static int set_client_config(const struct tls_connection_params *cfg, tls_contex
 #ifdef CONFIG_ESP_WIFI_DISABLE_KEY_USAGE_CHECK
 	mbedtls_ssl_set_verify( &tls->ssl, tls_disable_key_usages, NULL );
 #endif /*CONFIG_ESP_WIFI_DISABLE_KEY_USAGE_CHECK*/
+	ret = mbedtls_ssl_set_hostname(&tls->ssl, cfg->domain_match);
+	if (ret != 0) {
+		wpa_printf(MSG_ERROR, "Failed to set hostname");
+		return ret;
+	}
 
 #ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
 	if (cfg->flags & TLS_CONN_USE_DEFAULT_CERT_BUNDLE) {
+		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 		wpa_printf(MSG_INFO, "Using default cert bundle");
 		if (esp_crt_bundle_attach_fn) {
 			ret = (*esp_crt_bundle_attach_fn)(&tls->conf);

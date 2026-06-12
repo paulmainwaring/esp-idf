@@ -74,6 +74,12 @@ menu "PHY"
                 If enabled, when an error occurs while the PHY init data is updated,
                 the program will terminate and restart.
                 If not enabled, the PHY init data will not be updated when an error occurs.
+
+        config ESP_PHY_RECORD_USED_TIME
+            bool "Record PHY used time"
+            default n
+            help
+                Select to support record and query phy used time.
     endif
 
     config ESP_PHY_MAX_WIFI_TX_POWER
@@ -124,7 +130,6 @@ menu "PHY"
     config ESP_PHY_ENABLE_CERT_TEST
         bool "Enable RF certification test functions"
         default n
-        depends on IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3
         help
             If enabled, you can use RF certification test APIs.
 
@@ -161,10 +166,31 @@ menu "PHY"
             high interference, enable this option will sacrifice Wi-Fi OFDM receive performance.
             But to guarantee 11b receive performance serves as a bottom line in this case.
 
+    config ESP_PHY_PLL_TRACK_PERIOD_MS
+        int "Set the period of the pll track"
+        default 1000
+        help
+            Set the period of the pll track.
+
     config ESP_PHY_PLL_TRACK_DEBUG
         bool "Enable pll track logging"
         default n
         help
             If enabled, there will be some logs while pll tracking
+
+    menuconfig ESP_PHY_DEBUG
+        bool "Enable PHY Debug"
+        default n
+        help
+            Enabling this option allows different kinds of phy debugging features.
+
+    config ESP_PHY_DISABLE_PLL_TRACK
+        bool "Disable phy pll track(only for experimental)"
+        depends on ESP_PHY_DEBUG
+        default n
+        help
+            Disable pll track. This configuration option is used for experimental.
+            PLL track helps the PHY module adapt to temperature changes, ensuring stable performance.
+            When pll enabled, the ESP PHY module will periodically track and adjust PLL parameters.
 
 endmenu  # PHY

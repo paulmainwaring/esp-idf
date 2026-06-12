@@ -6,6 +6,8 @@
 
 #include "esp_wifi_driver.h"
 #include "esp_wps.h"
+#include "wps/wps.h"
+#include "wps/wps_attr_parse.h"
 
 /* WPS message flag */
 enum wps_msg_flag {
@@ -48,7 +50,7 @@ enum wps_sm_state{
 };
 #endif /* ESP_SUPPLICANT */
 
-#define WPS_IGNORE_SEL_REG_MAX_CNT	4
+#define WPS_IGNORE_SEL_REG_MAX_CNT  10
 
 #define WPS_MAX_DIS_AP_NUM	10
 
@@ -57,15 +59,6 @@ struct discard_ap_list_t{
 	u8 bssid[6];
 };
 
-#ifndef MAX_PASSPHRASE_LEN
-#define MAX_PASSPHRASE_LEN 64
-#endif
-
-#ifndef MAX_CRED_COUNT
-#define MAX_CRED_COUNT 10
-#endif
-
-#define WPS_OUTBUF_SIZE 500
 struct wps_sm {
     u8 state;
     struct wps_config *wps_cfg;
@@ -75,13 +68,11 @@ struct wps_sm {
     u8 identity_len;
     u8 ownaddr[ETH_ALEN];
     u8 bssid[ETH_ALEN];
-    u8 ssid[MAX_CRED_COUNT][SSID_MAX_LEN];
-    u8 ssid_len[MAX_CRED_COUNT];
-    char key[MAX_CRED_COUNT][MAX_PASSPHRASE_LEN];
-    u8 key_len[MAX_CRED_COUNT];
+    struct wps_credential creds[MAX_CRED_COUNT];
     u8 ap_cred_cnt;
     struct wps_device_data *dev;
-    u8 uuid[16];
+    u8 uuid[WPS_UUID_LEN];
+    u8 uuid_r[WPS_UUID_LEN];
     u8 current_identifier;
     bool is_wps_scan;
     u8 channel;
@@ -91,8 +82,10 @@ struct wps_sm {
 #endif
     u8 discover_ssid_cnt;
     bool ignore_sel_reg;
+    bool wps_pbc_overlap;
     struct discard_ap_list_t dis_ap_list[WPS_MAX_DIS_AP_NUM];
     u8 discard_ap_cnt;
+    bool intermediate_disconnect;
 };
 
 #define API_MUTEX_TAKE() do {\
@@ -147,3 +140,4 @@ static inline int wps_set_status(uint32_t status)
 bool is_wps_enabled(void);
 int wps_init_cfg_pin(struct wps_config *cfg);
 void wifi_station_wps_eapol_start_handle(void *data, void *user_ctx);
+int wifi_ap_wps_disable_internal(void);

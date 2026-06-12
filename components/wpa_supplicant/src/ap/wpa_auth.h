@@ -144,6 +144,10 @@ struct wpa_auth_config {
 #ifdef CONFIG_IEEE80211W
 	enum mfp_options ieee80211w;
 #endif /* CONFIG_IEEE80211W */
+	int group_mgmt_cipher;
+#ifdef CONFIG_SAE
+	int sae_require_mfp;
+#endif /* CONFIG_SAE */
 #ifdef CONFIG_IEEE80211R
 #define SSID_LEN 32
 	u8 ssid[SSID_LEN];
@@ -163,6 +167,7 @@ struct wpa_auth_config {
 	int ap_mlme;
 	enum sae_pwe sae_pwe;
 	struct rsn_sppamsdu_sup spp_sup;
+	u8 transition_disable;
 };
 
 typedef enum {
@@ -295,7 +300,7 @@ int wpa_wnmsleep_igtk_subelem(struct wpa_state_machine *sm, u8 *pos);
 
 int wpa_auth_uses_sae(struct wpa_state_machine *sm);
 int wpa_auth_pmksa_add_sae(struct wpa_authenticator *wpa_auth, const u8 *addr,
-			    const u8 *pmk, const u8 *pmkid,bool cache_pmksa);
+			    const u8 *pmk, size_t pmk_len, const u8 *pmkid,bool cache_pmksa, int akmp);
 void wpa_auth_add_sae_pmkid(struct wpa_state_machine *sm, const u8 *pmkid);
 void wpa_auth_pmksa_remove(struct wpa_authenticator *wpa_auth,
 			    const u8 *sta_addr);

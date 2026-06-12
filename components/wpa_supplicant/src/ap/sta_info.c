@@ -113,6 +113,10 @@ void ap_free_sta(struct hostapd_data *hapd, struct sta_info *sta)
 		os_mutex_delete(sta->lock);
 		sta->lock = NULL;
 	}
+	if (sta->sae_data) {
+		wpabuf_free(sta->sae_data);
+		sta->sae_data = NULL;
+	}
 #endif /* CONFIG_SAE */
 	wpa_auth_sta_deinit(sta->wpa_sm);
 #ifdef CONFIG_WPS_REGISTRAR
@@ -169,15 +173,14 @@ struct sta_info * ap_sta_add(struct hostapd_data *hapd, const u8 *addr)
 	/* initialize STA info data */
 	os_memcpy(sta->addr, addr, ETH_ALEN);
 	sta->next = hapd->sta_list;
-	hapd->sta_list = sta;
-	hapd->num_sta++;
-	ap_sta_hash_add(hapd, sta);
 #ifdef CONFIG_SAE
 	sta->sae_commit_processing = false;
 	sta->remove_pending = false;
 	sta->lock = os_semphr_create(1, 1);
 #endif /* CONFIG_SAE */
-
+	hapd->sta_list = sta;
+	hapd->num_sta++;
+	ap_sta_hash_add(hapd, sta);
 	return sta;
 }
 

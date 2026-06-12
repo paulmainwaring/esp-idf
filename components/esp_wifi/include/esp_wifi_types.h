@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -55,16 +55,20 @@ typedef struct {
     wifi_country_policy_t policy;  /**< country policy */
 } wifi_country_t;
 
-/* Strength of authmodes */
-/* OPEN < WEP < WPA_PSK < OWE < WPA2_PSK = WPA_WPA2_PSK < WAPI_PSK < WPA3_PSK = WPA2_WPA3_PSK */
+/**
+  * @brief Wi-Fi authmode type
+  * Strength of authmodes
+  * Personal Networks   : OPEN < WEP < WPA_PSK < OWE < WPA2_PSK = WPA_WPA2_PSK < WAPI_PSK < WPA3_PSK = WPA2_WPA3_PSK
+  * Enterprise Networks : WIFI_AUTH_WPA_ENTERPRISE < WIFI_AUTH_WPA2_ENTERPRISE < WIFI_AUTH_WPA3_ENT_192
+  */
 typedef enum {
     WIFI_AUTH_OPEN = 0,         /**< authenticate mode : open */
     WIFI_AUTH_WEP,              /**< authenticate mode : WEP */
     WIFI_AUTH_WPA_PSK,          /**< authenticate mode : WPA_PSK */
     WIFI_AUTH_WPA2_PSK,         /**< authenticate mode : WPA2_PSK */
     WIFI_AUTH_WPA_WPA2_PSK,     /**< authenticate mode : WPA_WPA2_PSK */
-    WIFI_AUTH_ENTERPRISE,       /**< authenticate mode : WiFi EAP security */
-    WIFI_AUTH_WPA2_ENTERPRISE = WIFI_AUTH_ENTERPRISE,  /**< authenticate mode : WiFi EAP security */
+    WIFI_AUTH_ENTERPRISE,       /**< authenticate mode : WiFi EAP security, treated the same as WIFI_AUTH_WPA2_ENTERPRISE */
+    WIFI_AUTH_WPA2_ENTERPRISE = WIFI_AUTH_ENTERPRISE,  /**< authenticate mode : WPA2-Enterprise security */
     WIFI_AUTH_WPA3_PSK,         /**< authenticate mode : WPA3_PSK */
     WIFI_AUTH_WPA2_WPA3_PSK,    /**< authenticate mode : WPA2_WPA3_PSK */
     WIFI_AUTH_WAPI_PSK,         /**< authenticate mode : WAPI_PSK */
@@ -72,6 +76,10 @@ typedef enum {
     WIFI_AUTH_WPA3_ENT_192,     /**< authenticate mode : WPA3_ENT_SUITE_B_192_BIT */
     WIFI_AUTH_WPA3_EXT_PSK,     /**< this authentication mode will yield same result as WIFI_AUTH_WPA3_PSK and not recommended to be used. It will be deprecated in future, please use WIFI_AUTH_WPA3_PSK instead. */
     WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE, /**< this authentication mode will yield same result as WIFI_AUTH_WPA3_PSK and not recommended to be used. It will be deprecated in future, please use WIFI_AUTH_WPA3_PSK instead.*/
+    WIFI_AUTH_DUMMY1,
+    WIFI_AUTH_DUMMY2,
+    WIFI_AUTH_DUMMY3,
+    WIFI_AUTH_WPA_ENTERPRISE,   /**< Authenticate mode : WPA-Enterprise security */
     WIFI_AUTH_MAX
 } wifi_auth_mode_t;
 
@@ -79,10 +87,13 @@ typedef enum {
     WIFI_REASON_UNSPECIFIED                        = 1,
     WIFI_REASON_AUTH_EXPIRE                        = 2,
     WIFI_REASON_AUTH_LEAVE                         = 3,
-    WIFI_REASON_ASSOC_EXPIRE                       = 4,
+    WIFI_REASON_ASSOC_EXPIRE                       = 4, /* Deprecated, will be removed in next IDF major release */
+    WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY         = 4,
     WIFI_REASON_ASSOC_TOOMANY                      = 5,
-    WIFI_REASON_NOT_AUTHED                         = 6,
-    WIFI_REASON_NOT_ASSOCED                        = 7,
+    WIFI_REASON_NOT_AUTHED                         = 6, /* Deprecated, will be removed in next IDF major release */
+    WIFI_REASON_CLASS2_FRAME_FROM_NONAUTH_STA      = 6,
+    WIFI_REASON_NOT_ASSOCED                        = 7, /* Deprecated, will be removed in next IDF major release */
+    WIFI_REASON_CLASS3_FRAME_FROM_NONASSOC_STA     = 7,
     WIFI_REASON_ASSOC_LEAVE                        = 8,
     WIFI_REASON_ASSOC_NOT_AUTHED                   = 9,
     WIFI_REASON_DISASSOC_PWRCAP_BAD                = 10,
@@ -245,7 +256,7 @@ typedef enum {
 
 /** @brief Structure describing parameters for a WiFi fast scan */
 typedef struct {
-    int8_t              rssi;             /**< The minimum rssi to accept in the fast scan mode */
+    int8_t              rssi;             /**< The minimum rssi to accept in the fast scan mode. Defaults to -127 if set to >= 0 */
     wifi_auth_mode_t    authmode;         /**< The weakest authmode to accept in the fast scan mode
                                                Note: Incase this value is not set and password is set as per WPA2 standards(password len >= 8), it will be defaulted to WPA2 and device won't connect to deprecated WEP/WPA networks. Please set authmode threshold as WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK to connect to WEP/WPA networks */
 }wifi_scan_threshold_t;
@@ -290,20 +301,22 @@ typedef enum {
 
 /** @brief Soft-AP configuration settings for the device */
 typedef struct {
-    uint8_t ssid[32];           /**< SSID of soft-AP. If ssid_len field is 0, this must be a Null terminated string. Otherwise, length is set according to ssid_len. */
-    uint8_t password[64];       /**< Password of soft-AP. */
-    uint8_t ssid_len;           /**< Optional length of SSID field. */
-    uint8_t channel;            /**< Channel of soft-AP */
-    wifi_auth_mode_t authmode;  /**< Auth mode of soft-AP. Do not support AUTH_WEP, AUTH_WAPI_PSK and AUTH_OWE in soft-AP mode. When the auth mode is set to WPA2_PSK, WPA2_WPA3_PSK or WPA3_PSK, the pairwise cipher will be overwritten with WIFI_CIPHER_TYPE_CCMP.  */
-    uint8_t ssid_hidden;        /**< Broadcast SSID or not, default 0, broadcast the SSID */
-    uint8_t max_connection;     /**< Max number of stations allowed to connect in */
-    uint16_t beacon_interval;   /**< Beacon interval which should be multiples of 100. Unit: TU(time unit, 1 TU = 1024 us). Range: 100 ~ 60000. Default value: 100 */
-    uint8_t csa_count;          /**< Channel Switch Announcement Count. Notify the station that the channel will switch after the csa_count beacon intervals. Default value: 3 */
-    uint8_t dtim_period;        /**< Dtim period of soft-AP. Default value: 2 */
-    wifi_cipher_type_t pairwise_cipher;   /**< Pairwise cipher of SoftAP, group cipher will be derived using this. Cipher values are valid starting from WIFI_CIPHER_TYPE_TKIP, enum values before that will be considered as invalid and default cipher suites(TKIP+CCMP) will be used. Valid cipher suites in softAP mode are WIFI_CIPHER_TYPE_TKIP, WIFI_CIPHER_TYPE_CCMP and WIFI_CIPHER_TYPE_TKIP_CCMP. */
-    bool ftm_responder;         /**< Enable FTM Responder mode */
-    wifi_pmf_config_t pmf_cfg;  /**< Configuration for Protected Management Frame */
-    wifi_sae_pwe_method_t sae_pwe_h2e;  /**< Configuration for SAE PWE derivation method */
+    uint8_t ssid[32];                         /**< SSID of soft-AP. If ssid_len field is 0, this must be a Null terminated string. Otherwise, length is set according to ssid_len. */
+    uint8_t password[64];                     /**< Password of soft-AP. */
+    uint8_t ssid_len;                         /**< Optional length of SSID field. */
+    uint8_t channel;                          /**< Channel of soft-AP. Set to 0 for auto selection (min channel: typically 1 for 2.4G). Other invalid values return ESP_ERR_INVALID_ARG. */
+    wifi_auth_mode_t authmode;                /**< Auth mode of soft-AP. Do not support AUTH_WEP, AUTH_WAPI_PSK and AUTH_OWE in soft-AP mode. When the auth mode is set to WPA2_PSK, WPA2_WPA3_PSK or WPA3_PSK, the pairwise cipher will be overwritten with WIFI_CIPHER_TYPE_CCMP by default, unless explicitly set.  */
+    uint8_t ssid_hidden;                      /**< Broadcast SSID or not, default 0, broadcast the SSID */
+    uint8_t max_connection;                   /**< Max number of stations allowed to connect in */
+    uint16_t beacon_interval;                 /**< Beacon interval which should be multiples of 100. Unit: TU(time unit, 1 TU = 1024 us). Range: 100 ~ 60000. Default value: 100 */
+    uint8_t csa_count;                        /**< Channel Switch Announcement Count. Notify the station that the channel will switch after the csa_count beacon intervals. Default value: 3 */
+    uint8_t dtim_period;                      /**< Dtim period of soft-AP. Range: 1 ~ 10. Default value: 1 */
+    wifi_cipher_type_t pairwise_cipher;       /**< Pairwise cipher of SoftAP, group cipher will be derived using this. Cipher values are valid starting from WIFI_CIPHER_TYPE_TKIP, enum values before that will be considered as invalid and default cipher suites(TKIP+CCMP) will be used. Valid cipher suites in softAP mode are WIFI_CIPHER_TYPE_TKIP, WIFI_CIPHER_TYPE_CCMP, WIFI_CIPHER_TYPE_TKIP_CCMP, WIFI_CIPHER_TYPE_GCMP and WIFI_CIPHER_TYPE_GCMP256. */
+    bool ftm_responder;                       /**< Enable FTM Responder mode */
+    wifi_pmf_config_t pmf_cfg;                /**< Configuration for Protected Management Frame */
+    wifi_sae_pwe_method_t sae_pwe_h2e;        /**< Configuration for SAE PWE derivation method. Default value :2 (WPA3_SAE_PWE_BOTH) */
+    uint8_t transition_disable;               /**< Whether to enable transition disable feature */
+    uint8_t sae_ext;                          /**< Enable SAE EXT feature. SOC_GCMP_SUPPORT is required for this feature. */
 } wifi_ap_config_t;
 
 #define SAE_H2E_IDENTIFIER_LEN 32
@@ -314,7 +327,7 @@ typedef struct {
     wifi_scan_method_t scan_method;           /**< do all channel scan or fast scan */
     bool bssid_set;                           /**< whether set MAC address of target AP or not. Generally, station_config.bssid_set needs to be 0; and it needs to be 1 only when users need to check the MAC address of the AP.*/
     uint8_t bssid[6];                         /**< MAC address of target AP*/
-    uint8_t channel;                          /**< channel of target AP. Set to 1~13 to scan starting from the specified channel before connecting to AP. If the channel of AP is unknown, set it to 0.*/
+    uint8_t channel;                          /**< Channel hint for target AP. Set to 1~13 to scan starting from the specified channel before connecting to AP. Set to 0 for no preference */
     uint16_t listen_interval;                 /**< Listen interval for ESP32 station to receive beacon when WIFI_PS_MAX_MODEM is set. Units: AP beacon intervals. Defaults to 3 if set to 0. */
     wifi_sort_method_t sort_method;           /**< sort the connect AP in the list by rssi or security mode */
     wifi_scan_threshold_t  threshold;         /**< When scan_threshold is set, only APs which have an auth mode that is more secure than the selected auth mode and a signal stronger than the minimum RSSI will be used. */
@@ -326,7 +339,7 @@ typedef struct {
     uint32_t owe_enabled:1;                   /**< Whether OWE is enabled for the connection */
     uint32_t transition_disable:1;            /**< Whether to enable transition disable feature */
     uint32_t reserved:26;                     /**< Reserved for future feature set */
-    wifi_sae_pwe_method_t sae_pwe_h2e;        /**< Configuration for SAE PWE derivation method */
+    wifi_sae_pwe_method_t sae_pwe_h2e;        /**< Configuration for SAE PWE derivation method. Default value :2 (WPA3_SAE_PWE_BOTH) */
     wifi_sae_pk_mode_t sae_pk_mode;           /**< Configuration for SAE-PK (Public Key) Authentication method */
     uint8_t failure_retry_cnt;                /**< Number of connection retries station will do before moving to next AP. scan_method should be set as WIFI_ALL_CHANNEL_SCAN to use this config.
                                                    Note: Enabling this may cause connection time to increase incase best AP doesn't behave properly. */
@@ -339,7 +352,7 @@ typedef struct {
     uint32_t he_trig_mu_bmforming_partial_feedback_disabled:1;    /**< Whether to disable support the transmission of partial-bandwidth MU feedback in an HE TB sounding sequence. */
     uint32_t he_trig_cqi_feedback_disabled:1;                     /**< Whether to disable support the transmission of CQI feedback in an HE TB sounding sequence. */
     uint32_t he_reserved:22;                                      /**< Reserved for future feature set */
-    uint8_t sae_h2e_identifier[SAE_H2E_IDENTIFIER_LEN];/**< Password identifier for H2E. this needs to be null terminated string */
+    uint8_t sae_h2e_identifier[SAE_H2E_IDENTIFIER_LEN];           /**< Password identifier for H2E. Strings null-terminated (length < SAE_H2E_IDENTIFIER_LEN) or non-null terminated (length = SAE_H2E_IDENTIFIER_LEN) are accepted. Non-null terminated string with 0xFF for full length of SAE_H2E_IDENTIFIER_LEN is not considered a valid identifier */
 } wifi_sta_config_t;
 
 /**
@@ -698,6 +711,31 @@ typedef struct {
 #define ESP_WIFI_MAX_SVC_NAME_LEN    256
 #define ESP_WIFI_MAX_FILTER_LEN      256
 #define ESP_WIFI_MAX_SVC_INFO_LEN    64
+#define ESP_WIFI_MAX_FUP_SSI_LEN        2048   /**< Maximum length of NAN Service Specific Info in a Follow-up frame */
+#define ESP_WIFI_MAX_SVC_SSI_LEN        512    /**< Maximum length of NAN Service Specific Info in Publish/Subscribe SDF's */
+#define WIFI_OUI_LEN                    3      /**< Length of OUI bytes in IE or attributes */
+
+/**
+  * @brief Protocol types in NAN service specific info attribute
+  *
+  */
+typedef enum {
+    WIFI_SVC_PROTO_RESERVED     = 0,    /**< Value 0 Reserved */
+    WIFI_SVC_PROTO_BONJOUR      = 1,    /**< Bonjour Protocol */
+    WIFI_SVC_PROTO_GENERIC      = 2,    /**< Generic Service Protocol */
+    WIFI_SVC_PROTO_CSA_MATTER   = 3,    /**< CSA Matter specific protocol */
+    WIFI_SVC_PROTO_MAX,                 /**< Values 4-255 Reserved */
+} wifi_nan_svc_proto_t;
+
+/**
+  * @brief WFA defined Protocol types in NAN service specific info attribute
+  *
+  */
+typedef struct {
+    uint8_t wfa_oui[WIFI_OUI_LEN];  /**< WFA OUI - 0x50, 0x6F, 0x9A */
+    wifi_nan_svc_proto_t proto;     /**< WFA defined protocol types */
+    uint8_t payload[0];             /**< Service Info payload */
+} wifi_nan_wfa_ssi_t;
 
 /**
   * @brief NAN Services types
@@ -718,10 +756,14 @@ typedef struct {
     char service_name[ESP_WIFI_MAX_SVC_NAME_LEN];   /**< Service name identifier */
     wifi_nan_service_type_t type;                   /**< Service type */
     char matching_filter[ESP_WIFI_MAX_FILTER_LEN];  /**< Comma separated filters for filtering services */
-    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];       /**< Service info shared in Publish frame */
+    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];       /**< To be deprecated in next major release, use ssi instead */
     uint8_t single_replied_event:1;                 /**< Give single Replied event or every time */
     uint8_t datapath_reqd:1;                        /**< NAN Datapath required for the service */
-    uint8_t reserved:6;                             /**< Reserved */
+    uint8_t fsd_reqd: 1;                            /**< Further Service Discovery(FSD) required */
+    uint8_t fsd_gas: 1;                             /**< 0 - Follow-up used for FSD, 1 - GAS used for FSD */
+    uint8_t reserved: 4;                            /**< Reserved */
+    uint16_t ssi_len;                               /**< Length of service specific info, maximum allowed length - ESP_WIFI_MAX_SVC_SSI_LEN */
+    uint8_t *ssi;                                   /**< Service Specific Info of type wifi_nan_wfa_ssi_t for WFA defined protocols, otherwise proprietary and defined by Applications */
 } wifi_nan_publish_cfg_t;
 
 /**
@@ -732,9 +774,14 @@ typedef struct {
     char service_name[ESP_WIFI_MAX_SVC_NAME_LEN];   /**< Service name identifier */
     wifi_nan_service_type_t type;                   /**< Service type */
     char matching_filter[ESP_WIFI_MAX_FILTER_LEN];  /**< Comma separated filters for filtering services */
-    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];       /**< Service info shared in Subscribe frame */
-    uint8_t single_match_event:1;                   /**< Give single Match event or every time */
-    uint8_t reserved:7;                             /**< Reserved */
+    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];       /**< To be deprecated in next major release, use ssi instead */
+    uint8_t single_match_event: 1;                  /**< Give single Match event(per SSI update)  or every time */
+    uint8_t datapath_reqd: 1;                       /**< NAN Datapath required for the service */
+    uint8_t fsd_reqd: 1;                            /**< Further Service Discovery(FSD) required */
+    uint8_t fsd_gas: 1;                             /**< 0 - Follow-up used for FSD, 1 - GAS used for FSD */
+    uint8_t reserved: 4;                            /**< Reserved */
+    uint16_t ssi_len;                               /**< Length of service specific info, maximum allowed length - ESP_WIFI_MAX_SVC_SSI_LEN */
+    uint8_t *ssi;                                   /**< Service Specific Info of type wifi_nan_wfa_ssi_t for WFA defined protocols, otherwise proprietary and defined by Applications */
 } wifi_nan_subscribe_cfg_t;
 
 /**
@@ -742,10 +789,12 @@ typedef struct {
   *
   */
 typedef struct {
-    uint8_t inst_id;                         /**< Own service instance id */
-    uint8_t peer_inst_id;                    /**< Peer's service instance id */
-    uint8_t peer_mac[6];                     /**< Peer's MAC address */
-    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< Service info(or message) to be shared */
+    uint8_t inst_id;                                /**< Own service instance id */
+    uint8_t peer_inst_id;                           /**< Peer's service instance id */
+    uint8_t peer_mac[6];                            /**< Peer's MAC address */
+    char svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];       /**< To be deprecated in next major release, use ssi instead */
+    uint16_t ssi_len;                               /**< Length of service specific info, maximum allowed length - ESP_WIFI_MAX_FUP_SSI_LEN */
+    uint8_t *ssi;                                   /**< Service Specific Info of type wifi_nan_wfa_ssi_t for WFA defined protocols, otherwise proprietary and defined by Applications */
 } wifi_nan_followup_params_t;
 
 /**
@@ -889,6 +938,7 @@ typedef enum {
     WIFI_EVENT_STA_BEACON_TIMEOUT,       /**< Station beacon timeout */
 
     WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START,   /**< Connectionless module wake interval start */
+    /* Add next events after this only */
 
     WIFI_EVENT_AP_WPS_RG_SUCCESS,       /**< Soft-AP wps succeeds in registrar mode */
     WIFI_EVENT_AP_WPS_RG_FAILED,        /**< Soft-AP wps fails in registrar mode */
@@ -914,6 +964,7 @@ typedef enum {
     WIFI_EVENT_NDP_TERMINATED,           /**< NAN Datapath terminated indication */
     WIFI_EVENT_HOME_CHANNEL_CHANGE,      /**< WiFi home channel change，doesn't occur when scanning */
 
+    WIFI_EVENT_AP_WRONG_PASSWORD,        /**< a station tried to connect with wrong password */
     WIFI_EVENT_MAX,                      /**< Invalid WiFi event ID */
 } wifi_event_t;
 
@@ -935,7 +986,7 @@ typedef struct {
     uint8_t ssid_len;         /**< SSID length of connected AP */
     uint8_t bssid[6];         /**< BSSID of connected AP*/
     uint8_t channel;          /**< channel of connected AP*/
-    wifi_auth_mode_t authmode;/**< authentication mode used by AP*/
+    wifi_auth_mode_t authmode;/**< authentication mode used by the connection*/
     uint16_t aid;             /**< authentication id assigned by the connected AP */
 } wifi_event_sta_connected_t;
 
@@ -1013,6 +1064,11 @@ typedef struct {
     uint8_t            new_chan;   /**< new home channel of the device */
     wifi_second_chan_t new_snd;    /**< new second channel of the device */
 } wifi_event_home_channel_change_t;
+
+/** Argument structure for WIFI_EVENT_AP_WRONG_PASSWORD event */
+typedef struct {
+    uint8_t mac[6];           /**< MAC address of the station trying to connect to Soft-AP */
+} wifi_event_ap_wrong_password_t;
 
 /**
   * @brief FTM operation status types
@@ -1100,6 +1156,15 @@ typedef struct {
     uint8_t publish_id;         /**< Publish Service Identifier */
     uint8_t pub_if_mac[6];      /**< NAN Interface MAC of the Publisher */
     bool update_pub_id;         /**< Indicates whether publisher's service ID needs to be updated */
+    uint8_t datapath_reqd: 1;   /**< NAN Datapath required for the service */
+    uint8_t fsd_reqd: 1;        /**< Further Service Discovery(FSD) required */
+    uint8_t fsd_gas: 1;         /**< 0 - Follow-up used for FSD, 1 - GAS used for FSD */
+    uint8_t reserved: 5;        /**< Reserved */
+    uint32_t reserved_1;        /**< Reserved */
+    uint32_t reserved_2;        /**< Reserved */
+    uint8_t ssi_version;        /**< Indicates version of SSI in Publish instance, 0 if not available */
+    uint16_t ssi_len;           /**< Length of service specific info */
+    uint8_t ssi[];              /**< Service specific info of Publisher */
 } wifi_event_nan_svc_match_t;
 
 /** Argument structure for WIFI_EVENT_NAN_REPLIED event */
@@ -1107,6 +1172,10 @@ typedef struct {
     uint8_t publish_id;         /**< Publish Service Identifier */
     uint8_t subscribe_id;       /**< Subscribe Service Identifier */
     uint8_t sub_if_mac[6];      /**< NAN Interface MAC of the Subscriber */
+    uint32_t reserved_1;        /**< Reserved */
+    uint32_t reserved_2;        /**< Reserved */
+    uint16_t ssi_len;           /**< Length of service specific info */
+    uint8_t ssi[];              /**< Service specific info of Subscriber */
 } wifi_event_nan_replied_t;
 
 /** Argument structure for WIFI_EVENT_NAN_RECEIVE event */
@@ -1114,7 +1183,11 @@ typedef struct {
     uint8_t inst_id;                                 /**< Our Service Identifier */
     uint8_t peer_inst_id;                            /**< Peer's Service Identifier */
     uint8_t peer_if_mac[6];                          /**< Peer's NAN Interface MAC */
-    uint8_t peer_svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< Peer Service Info */
+    uint8_t peer_svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< To be deprecated in next major release, use ssi instead */
+    uint32_t reserved_1;                             /**< Reserved */
+    uint32_t reserved_2;                             /**< Reserved */
+    uint16_t ssi_len;                                /**< Length of service specific info */
+    uint8_t ssi[];                                   /**< Service specific info from Follow-up */
 } wifi_event_nan_receive_t;
 
 /** Argument structure for WIFI_EVENT_NDP_INDICATION event */
@@ -1123,7 +1196,11 @@ typedef struct {
     uint8_t ndp_id;                             /**< NDP instance id */
     uint8_t peer_nmi[6];                        /**< Peer's NAN Management Interface MAC */
     uint8_t peer_ndi[6];                        /**< Peer's NAN Data Interface MAC */
-    uint8_t svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< Service Specific Info */
+    uint8_t svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< To be deprecated in next major release, use ssi instead */
+    uint32_t reserved_1;                        /**< Reserved */
+    uint32_t reserved_2;                        /**< Reserved */
+    uint16_t ssi_len;                           /**< Length of service specific info */
+    uint8_t ssi[];                              /**< Service specific info from NDP/NDPE Attribute */
 } wifi_event_ndp_indication_t;
 
 /** Argument structure for WIFI_EVENT_NDP_CONFIRM event */
@@ -1133,7 +1210,11 @@ typedef struct {
     uint8_t peer_nmi[6];                        /**< Peer's NAN Management Interface MAC */
     uint8_t peer_ndi[6];                        /**< Peer's NAN Data Interface MAC */
     uint8_t own_ndi[6];                         /**< Own NAN Data Interface MAC */
-    uint8_t svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< Service Specific Info */
+    uint8_t svc_info[ESP_WIFI_MAX_SVC_INFO_LEN];/**< To be deprecated in next major release, use ssi instead */
+    uint32_t reserved_1;                        /**< Reserved */
+    uint32_t reserved_2;                        /**< Reserved */
+    uint16_t ssi_len;                           /**< Length of Service Specific Info */
+    uint8_t ssi[];                              /**< Service specific info from NDP/NDPE Attribute */
 } wifi_event_ndp_confirm_t;
 
 /** Argument structure for WIFI_EVENT_NDP_TERMINATED event */
@@ -1142,6 +1223,17 @@ typedef struct {
     uint8_t ndp_id;                             /**< NDP instance id */
     uint8_t init_ndi[6];                        /**< Initiator's NAN Data Interface MAC */
 } wifi_event_ndp_terminated_t;
+
+/**
+  * @brief Argument structure for wifi_tx_rate_config
+  */
+typedef struct {
+    wifi_phy_mode_t phymode;                 /**< Phymode of specified interface */
+    wifi_phy_rate_t rate;                    /**< Rate of specified interface */
+    bool ersu;                               /**< Using ERSU to send frame, ERSU is a transmission mode related to 802.11 ax.
+                                                  ERSU is always used in long distance transmission, and its frame has lower rate compared with SU mode */
+    bool dcm;                                /**< Using dcm rate to send frame */
+} wifi_tx_rate_config_t;
 
 #ifdef __cplusplus
 }
