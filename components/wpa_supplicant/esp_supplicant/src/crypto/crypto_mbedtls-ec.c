@@ -34,6 +34,18 @@
 #define ECP_PRV_DER_MAX_BYTES   ( 29 + 3 * MBEDTLS_ECP_MAX_BYTES )
 #define ECP_PUB_DER_MAX_BYTES   ( 30 + 2 * MBEDTLS_ECP_MAX_BYTES )
 
+/* Fork-local compat shim: mbedtls_ecp_group_a_is_minus_3() is public API from
+ * mbedtls 3.5 onward, but this tree pins mbedtls 3.4.0 (pre-v5.2.7 base).
+ * Identical to the upstream definition in mbedtls 3.6 include/mbedtls/ecp.h:
+ * for Short Weierstrass curves mbedtls leaves grp->A unset (p == NULL) to
+ * represent A = -3. Remove if components/mbedtls is ever synced to >= 3.5. */
+#if MBEDTLS_VERSION_NUMBER < 0x03050000
+static inline int mbedtls_ecp_group_a_is_minus_3(const mbedtls_ecp_group *grp)
+{
+    return grp->A.MBEDTLS_PRIVATE(p) == NULL;
+}
+#endif
+
 #ifdef CONFIG_MBEDTLS_ECDH_LEGACY_CONTEXT
 #define ACCESS_ECDH(S, var) S->MBEDTLS_PRIVATE(var)
 #else
