@@ -152,6 +152,10 @@
 // ESP32-S3 has 1 GPIO peripheral
 #define SOC_GPIO_PORT                      1U
 #define SOC_GPIO_PIN_COUNT                 49
+// Backported from v5.2.7 (55ed548cc66, cap only) — referenced by the synced
+// esp_coex Kconfig's GPIO-debug options; without it kconfgen warns
+// "non-int range [0, SOC_GPIO_OUT_RANGE_MAX (undefined)]" on every configure.
+#define SOC_GPIO_OUT_RANGE_MAX             48
 #define SOC_GPIO_SUPPORT_PIN_GLITCH_FILTER 1
 #define SOC_GPIO_FILTER_CLK_SUPPORT_APB 1
 
