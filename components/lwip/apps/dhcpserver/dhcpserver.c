@@ -1334,6 +1334,54 @@ POOL_CHECK:
 }
 
 /******************************************************************************
+ * FunctionName : dhcps_handle_msg
+ * Description  : run the server state machine for one received message and
+ *                send the reply
+ * Parameters   : m -- the copied DHCP message (heap, owned by the caller)
+ *                msg_len -- allocated size of m
+ *                opt_len -- length of the options field
+ * Returns      : true if ownership of m was taken (reply deferred), false if
+ *                the caller must free m
+*******************************************************************************/
+static bool dhcps_handle_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t msg_len, u16_t opt_len)
+{
+    s16_t state;
+
+    state = parse_msg(dhcps, m, opt_len);
+#ifdef LWIP_HOOK_DHCPS_POST_STATE
+    state = LWIP_HOOK_DHCPS_POST_STATE(m, msg_len, state);
+#endif /* LWIP_HOOK_DHCPS_POST_STATE */
+
+    switch (state) {
+        case DHCPS_STATE_OFFER://1
+#if DHCPS_DEBUG
+            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_OFFER\n");
+#endif
+            send_offer(dhcps, m, msg_len);
+            break;
+
+        case DHCPS_STATE_ACK://3
+#if DHCPS_DEBUG
+            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_ACK\n");
+#endif
+            send_ack(dhcps, m, msg_len);
+            break;
+
+        case DHCPS_STATE_NAK://4
+#if DHCPS_DEBUG
+            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_NAK\n");
+#endif
+            send_nak(dhcps, m, msg_len);
+            break;
+
+        default :
+            break;
+    }
+
+    return false;
+}
+
+/******************************************************************************
  * FunctionName : handle_dhcp
  * Description  : If an incoming DHCP message is in response to us, then trigger the state machine
  * Parameters   : arg -- arg user supplied argument (udp_pcb.recv_arg)
@@ -1353,7 +1401,6 @@ static void handle_dhcp(void *arg,
     struct dhcps_msg *pmsg_dhcps = NULL;
     u16_t tlen, malloc_len;
     u8_t *p_dhcps_msg = NULL;
-    s16_t state;
 
 #if DHCPS_DEBUG
     DHCPS_LOG("dhcps: handle_dhcp-> receive a packet\n");
@@ -1400,43 +1447,15 @@ static void handle_dhcp(void *arg,
     DHCPS_LOG("dhcps: handle_dhcp-> parse_msg(p)\n");
 #endif
 
-    state = parse_msg(dhcps, pmsg_dhcps, tlen >= 240 ? (u16_t)(tlen - 240) : 0);
-#ifdef LWIP_HOOK_DHCPS_POST_STATE
-    state = LWIP_HOOK_DHCPS_POST_STATE(pmsg_dhcps, malloc_len, state);
-#endif /* LWIP_HOOK_DHCPS_POST_STATE */
-
-    switch (state) {
-        case DHCPS_STATE_OFFER://1
-#if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_OFFER\n");
-#endif
-            send_offer(dhcps, pmsg_dhcps, malloc_len);
-            break;
-
-        case DHCPS_STATE_ACK://3
-#if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_ACK\n");
-#endif
-            send_ack(dhcps, pmsg_dhcps, malloc_len);
-            break;
-
-        case DHCPS_STATE_NAK://4
-#if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_NAK\n");
-#endif
-            send_nak(dhcps, pmsg_dhcps, malloc_len);
-            break;
-
-        default :
-            break;
+    if (!dhcps_handle_msg(dhcps, pmsg_dhcps, malloc_len, tlen >= 240 ? (u16_t)(tlen - 240) : 0)) {
+        mem_free(pmsg_dhcps);
     }
+    pmsg_dhcps = NULL;
 
 #if DHCPS_DEBUG
     DHCPS_LOG("dhcps: handle_dhcp-> pbuf_free(p)\n");
 #endif
     pbuf_free(p);
-    mem_free(pmsg_dhcps);
-    pmsg_dhcps = NULL;
 }
 
 /******************************************************************************
