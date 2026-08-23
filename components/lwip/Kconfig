@@ -344,6 +344,17 @@ menu "LWIP"
                 Enabling this option allows DHCP server to support temporary static ARP entries
                 for DHCP Client. This will help the DHCP server to send the DHCP OFFER and DHCP ACK using IP unicast.
 
+        config LWIP_DHCPS_DECLINE_HOLD_SECS
+            int "Seconds to withhold an address after DHCPDECLINE or an ARP conflict"
+            range 10 86400
+            default 3600
+            depends on LWIP_DHCPS
+            help
+                RFC 2131 4.3.3: when a client declines an address (it found it in use),
+                or the server's own pre-offer ARP probe finds it in use, the server
+                marks the address as not available. It is excluded from allocation for
+                this many seconds and then becomes allocatable (and is probed) again.
+
     endmenu # DHCPS
 
     menuconfig LWIP_AUTOIP

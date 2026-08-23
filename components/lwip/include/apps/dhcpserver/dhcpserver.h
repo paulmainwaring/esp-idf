@@ -67,9 +67,14 @@ enum dhcps_offer_option{
 #define DHCPS_LEASE_TIME_DEF (120)
 #define DHCPS_LEASE_UNIT CONFIG_LWIP_DHCPS_LEASE_UNIT
 
+/** Address is withheld (DHCPDECLINE or ARP conflict): not a lease, mac is zero,
+ *  lease_timer counts down the hold period */
+#define DHCPS_POOL_FLAG_HOLD 0x01
+
 struct dhcps_pool{
 	ip4_addr_t ip;
 	u8_t mac[6];
+	u8_t flags;
 	u32_t lease_timer;
 };
 

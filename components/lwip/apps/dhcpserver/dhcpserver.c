@@ -18,6 +18,7 @@
 
 #include "dhcpserver/dhcpserver.h"
 #include "dhcpserver/dhcpserver_options.h"
+#include "esp_log.h"
 
 #if ESP_DHCPS
 
@@ -95,6 +96,9 @@
     } while (0)
 
 #define MAX_STATION_NUM CONFIG_LWIP_DHCPS_MAX_STATION_NUM
+
+/* hold-down period of a withheld address, in dhcps_tmr ticks */
+#define DHCPS_HOLD_TICKS (CONFIG_LWIP_DHCPS_DECLINE_HOLD_SECS / DHCPS_COARSE_TIMER_SECS)
 
 #define DHCPS_STATE_OFFER 1
 #define DHCPS_STATE_DECLINE 2
@@ -387,6 +391,138 @@ void node_remove_from_list(list_node **phead, list_node *pdelete)
             }
         }
     }
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_addr_in_pool
+ * Description  : check whether an address lies inside the configured pool
+ * Parameters   : addr -- IPv4 address, network byte order
+ * Returns      : true if start_ip <= addr <= end_ip
+*******************************************************************************/
+static bool dhcps_addr_in_pool(dhcps_t *dhcps, u32_t addr)
+{
+    u32_t a = lwip_ntohl(addr);
+
+    return a >= lwip_ntohl(dhcps->dhcps_poll.start_ip.addr) &&
+           a <= lwip_ntohl(dhcps->dhcps_poll.end_ip.addr);
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_pool_find_ip
+ * Description  : find the pool node (lease or hold) for an address
+ * Parameters   : addr -- IPv4 address, network byte order
+ * Returns      : the node or NULL
+*******************************************************************************/
+static struct dhcps_pool *dhcps_pool_find_ip(dhcps_t *dhcps, u32_t addr)
+{
+    list_node *pback_node = NULL;
+    struct dhcps_pool *pdhcps_pool = NULL;
+
+    for (pback_node = dhcps->plist; pback_node != NULL; pback_node = pback_node->pnext) {
+        pdhcps_pool = pback_node->pnode;
+
+        if (pdhcps_pool->ip.addr == addr) {
+            return pdhcps_pool;
+        }
+    }
+
+    return NULL;
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_pool_hold
+ * Description  : turn a pool node into a MAC-less hold node so the address is
+ *                excluded from allocation for DHCPS_HOLD_TICKS (RFC 2131 4.3.3)
+ * Parameters   : pool -- the node
+ *                by_mac -- MAC that declined / answered for the address (log only)
+ *                why -- reason text (log only)
+ * Returns      : none
+*******************************************************************************/
+static void dhcps_pool_hold(dhcps_t *dhcps, struct dhcps_pool *pool, const u8_t *by_mac, const char *why)
+{
+    ESP_LWIP_LOGI("dhcps: %d.%d.%d.%d %s by %02x:%02x:%02x:%02x:%02x:%02x, withheld for %d s",
+                  ip4_addr1(&pool->ip), ip4_addr2(&pool->ip), ip4_addr3(&pool->ip), ip4_addr4(&pool->ip),
+                  why, by_mac[0], by_mac[1], by_mac[2], by_mac[3], by_mac[4], by_mac[5],
+                  CONFIG_LWIP_DHCPS_DECLINE_HOLD_SECS);
+    memset(pool->mac, 0, sizeof(pool->mac));
+    pool->flags |= DHCPS_POOL_FLAG_HOLD;
+    pool->lease_timer = DHCPS_HOLD_TICKS;
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_pool_hold_new
+ * Description  : create a hold node for an address that has no pool node yet
+ * Parameters   : addr -- IPv4 address, network byte order
+ *                by_mac, why -- see dhcps_pool_hold
+ * Returns      : none
+*******************************************************************************/
+static void dhcps_pool_hold_new(dhcps_t *dhcps, u32_t addr, const u8_t *by_mac, const char *why)
+{
+    struct dhcps_pool *pool = (struct dhcps_pool *)mem_calloc(1, sizeof(struct dhcps_pool));
+    list_node *node = NULL;
+
+    if (pool == NULL) {
+        return;
+    }
+
+    node = (list_node *)mem_calloc(1, sizeof(list_node));
+
+    if (node == NULL) {
+        mem_free(pool);
+        return;
+    }
+
+    pool->ip.addr = addr;
+    node->pnode = pool;
+    node->pnext = NULL;
+    node_insert_to_list(&dhcps->plist, node);
+    dhcps_pool_hold(dhcps, pool, by_mac, why);
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_handle_decline
+ * Description  : DHCPDECLINE: the client found the address in use. Withhold
+ *                the declined address (option 50) and detach it from the
+ *                client's MAC so its next DISCOVER gets a different one.
+ * Parameters   : pnode, pool -- the node parse_msg found or allocated for this
+ *                MAC (ownership is taken: kept as hold node or freed)
+ *                chaddr -- the declining client's MAC
+ * Returns      : none
+*******************************************************************************/
+static void dhcps_handle_decline(dhcps_t *dhcps, list_node *pnode, struct dhcps_pool *pool, const u8_t *chaddr)
+{
+    u32_t declined = dhcps->opt_req_ip.addr;   /* RFC 2131 table 5: option 50 MUST be present */
+    struct dhcps_pool *other = NULL;
+
+    if (pool != NULL && declined != 0 && pool->ip.addr == declined) {
+        /* the address we leased to this MAC: keep the node, drop the MAC */
+        dhcps_pool_hold(dhcps, pool, chaddr, "declined");
+        return;
+    }
+
+    /* not this MAC's lease (fresh cursor node or stale client state): free it */
+    if (pnode != NULL) {
+        node_remove_from_list(&dhcps->plist, pnode);
+        mem_free(pnode);
+    }
+
+    if (pool != NULL) {
+        mem_free(pool);
+    }
+
+    if (declined == 0 || !dhcps_addr_in_pool(dhcps, declined)) {
+        return;
+    }
+
+    other = dhcps_pool_find_ip(dhcps, declined);
+
+    if (other == NULL) {
+        /* e.g. server restarted between ACK and DECLINE */
+        dhcps_pool_hold_new(dhcps, declined, chaddr, "declined");
+    } else if (other->flags & DHCPS_POOL_FLAG_HOLD) {
+        other->lease_timer = DHCPS_HOLD_TICKS;
+    }
+    /* else: leased to another MAC; a stray DECLINE must not evict a valid lease */
 }
 
 /******************************************************************************
@@ -1067,7 +1203,8 @@ static s16_t parse_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t len)
             for (pback_node = dhcps->plist; pback_node != NULL; pback_node = pback_node->pnext) {
                 pdhcps_pool = pback_node->pnode;
 
-                if (memcmp(pdhcps_pool->mac, m->chaddr, sizeof(pdhcps_pool->mac)) == 0) {
+                if (!(pdhcps_pool->flags & DHCPS_POOL_FLAG_HOLD) &&
+                    memcmp(pdhcps_pool->mac, m->chaddr, sizeof(pdhcps_pool->mac)) == 0) {
                     if (memcmp(&pdhcps_pool->ip.addr, m->ciaddr, sizeof(pdhcps_pool->ip.addr)) == 0) {
                         dhcps->renew = true;
                     }
@@ -1164,8 +1301,14 @@ POOL_CHECK:
          * do not answer (unknown type, INFORM, REQUEST for another server, ...)
          * came from a client that had no lease: the node was only allocated
          * speculatively above and must not consume a pool address. */
-        if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK || ret ==  DHCPS_STATE_DECLINE ||
-            (ret == DHCPS_STATE_IDLE && dhcps->alloc_new)) {
+        if (ret == DHCPS_STATE_DECLINE) {
+            dhcps_handle_decline(dhcps, pnode, pdhcps_pool, m->chaddr);   /* takes ownership */
+            pnode = NULL;
+            pdhcps_pool = NULL;
+            dhcps->has_declined_ip = true;   /* upstream flag; harmless with hold nodes present */
+            memset(&dhcps->client_address, 0x0, sizeof(dhcps->client_address));
+        } else if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK ||
+                   (ret == DHCPS_STATE_IDLE && dhcps->alloc_new)) {
             if (pnode != NULL) {
                 node_remove_from_list(&dhcps->plist, pnode);
                 mem_free(pnode);
@@ -1177,9 +1320,6 @@ POOL_CHECK:
                 pdhcps_pool = NULL;
             }
 
-            if (ret ==  DHCPS_STATE_DECLINE) {
-                dhcps->has_declined_ip = true;
-            }
             memset(&dhcps->client_address, 0x0, sizeof(dhcps->client_address));
         }
 
@@ -1469,24 +1609,28 @@ static void kill_oldest_dhcps_pool(dhcps_t *dhcps)
     list_node *pre = NULL, *p = NULL;
     list_node *minpre = NULL, *minp = NULL;
     struct dhcps_pool *pdhcps_pool = NULL, *pmin_pool = NULL;
-    pre = dhcps->plist;
-    assert(pre != NULL && pre->pnext != NULL); // Expect the list to have at least 2 nodes
-    p = pre->pnext;
-    minpre = pre;
-    minp = pre;
 
-    while (p != NULL) {
+    /* find the lease with the least remaining time; hold nodes are not leases
+     * and are never evicted */
+    for (p = dhcps->plist; p != NULL; pre = p, p = p->pnext) {
         pdhcps_pool = p->pnode;
-        pmin_pool = minp->pnode;
 
-        if (pdhcps_pool->lease_timer < pmin_pool->lease_timer) {
+        if (pdhcps_pool->flags & DHCPS_POOL_FLAG_HOLD) {
+            continue;
+        }
+
+        pmin_pool = (minp != NULL) ? minp->pnode : NULL;
+
+        if (pmin_pool == NULL || pdhcps_pool->lease_timer < pmin_pool->lease_timer) {
             minp = p;
             minpre = pre;
         }
-
-        pre = p;
-        p = p->pnext;
     }
+
+    if (minp == NULL) {
+        return;
+    }
+
     if (minp == dhcps->plist) {
         dhcps->plist = minp->pnext;
     } else {
@@ -1537,7 +1681,10 @@ static void dhcps_tmr(void *arg)
             pback_node = NULL;
         } else {
             pnode = pnode ->pnext;
-            num_dhcps_pool ++;
+
+            if (!(pdhcps_pool->flags & DHCPS_POOL_FLAG_HOLD)) {
+                num_dhcps_pool ++;
+            }
         }
     }
 
@@ -1565,6 +1712,10 @@ bool dhcp_search_ip_on_mac(dhcps_t *dhcps, u8_t *mac, ip4_addr_t *ip)
 
     for (pback_node = dhcps->plist; pback_node != NULL; pback_node = pback_node->pnext) {
         pdhcps_pool = pback_node->pnode;
+
+        if (pdhcps_pool->flags & DHCPS_POOL_FLAG_HOLD) {
+            continue;
+        }
 
         if (memcmp(pdhcps_pool->mac, mac, sizeof(pdhcps_pool->mac)) == 0) {
             memcpy(&ip->addr, &pdhcps_pool->ip.addr, sizeof(pdhcps_pool->ip.addr));
