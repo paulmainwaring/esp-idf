@@ -143,6 +143,9 @@ struct dhcps_t {
     struct udp_pcb *dhcps_pcb;
     dhcps_handle_state state;
     bool has_declined_ip;
+    bool alloc_new;             /* parse_msg() created a fresh lease node for the current message */
+    ip4_addr_t opt_req_ip;      /* option 50 of the current message, 0 if absent */
+    bool opt_other_server;      /* option 54 of the current message names another server */
 };
 
 
@@ -171,6 +174,9 @@ dhcps_t *dhcps_new(void)
     dhcps->dhcps_pcb = NULL;
     dhcps->state = DHCPS_HANDLE_CREATED;
     dhcps->has_declined_ip = false;
+    dhcps->alloc_new = false;
+    dhcps->opt_req_ip.addr = 0;
+    dhcps->opt_other_server = false;
     return dhcps;
 }
 
@@ -394,6 +400,24 @@ static u8_t *add_msg_type(u8_t *optptr, u8_t type)
     *optptr++ = DHCP_OPTION_MSG_TYPE;
     *optptr++ = 1;
     *optptr++ = type;
+    return optptr;
+}
+
+/******************************************************************************
+ * FunctionName : add_server_id
+ * Description  : add Server Identifier option (RFC 2131 table 3: MUST be
+ *                present in DHCPOFFER, DHCPACK and DHCPNAK)
+ * Parameters   : optptr -- the addr of DHCP message option
+ * Returns      : the addr of DHCP message option
+*******************************************************************************/
+static u8_t *add_server_id(dhcps_t *dhcps, u8_t *optptr)
+{
+    *optptr++ = DHCP_OPTION_SERVER_ID;
+    *optptr++ = 4;
+    *optptr++ = ip4_addr1(&dhcps->server_address);
+    *optptr++ = ip4_addr2(&dhcps->server_address);
+    *optptr++ = ip4_addr3(&dhcps->server_address);
+    *optptr++ = ip4_addr4(&dhcps->server_address);
     return optptr;
 }
 
@@ -692,8 +716,12 @@ static void send_nak(dhcps_t *dhcps, struct dhcps_msg *m, u16_t len)
     err_t SendNak_err_t;
 #endif
     create_msg(dhcps, m);
+    /* RFC 2131 table 3: yiaddr MUST be 0 in DHCPNAK (client_address may be stale
+     * on the pool-exhausted path) and the Server Identifier MUST be present */
+    memset((char *) m->yiaddr, 0, sizeof(m->yiaddr));
 
     end = add_msg_type(&m->options[4], DHCPNAK);
+    end = add_server_id(dhcps, end);
     LWIP_HOOK_DHCPS_POST_APPEND_OPTS(dhcps->dhcps_netif, dhcps, DHCPNAK, &end)
     end = add_end(end);
 
@@ -880,6 +908,8 @@ static u8_t parse_options(dhcps_t *dhcps, u8_t *optptr, s16_t len)
     u16_t type = 0;
 
     s.state = DHCPS_STATE_IDLE;
+    dhcps->opt_req_ip.addr = 0;
+    dhcps->opt_other_server = false;
 
     while (optptr < end) {
 #if DHCPS_DEBUG
@@ -915,7 +945,12 @@ static u8_t parse_options(dhcps_t *dhcps, u8_t *optptr, s16_t len)
 
             case DHCP_OPTION_REQ_IPADDR://50
                 if (opt_len >= 4) {
-                    if (memcmp((char *) &client.addr, (char *) optptr + 2, 4) == 0) {
+                    memcpy(&dhcps->opt_req_ip.addr, optptr + 2, 4);
+                    /* A client the server has no lease for (alloc_new) is never ACKed
+                     * just because the requested address happens to equal the pool
+                     * cursor: NAK it so it re-DISCOVERs and goes through the normal
+                     * allocation (and conflict probe) path. */
+                    if (!dhcps->alloc_new && memcmp((char *) &client.addr, (char *) optptr + 2, 4) == 0) {
 #if DHCPS_DEBUG
                         DHCPS_LOG("dhcps: DHCP_OPTION_REQ_IPADDR = 0 ok\n");
 #endif
@@ -926,6 +961,14 @@ static u8_t parse_options(dhcps_t *dhcps, u8_t *optptr, s16_t len)
 #endif
                         s.state = DHCPS_STATE_NAK;
                     }
+                }
+
+                break;
+
+            case DHCP_OPTION_SERVER_ID://54
+                if (opt_len >= 4 &&
+                    memcmp((char *) &dhcps->server_address.addr, (char *) optptr + 2, 4) != 0) {
+                    dhcps->opt_other_server = true;
                 }
 
                 break;
@@ -944,6 +987,15 @@ static u8_t parse_options(dhcps_t *dhcps, u8_t *optptr, s16_t len)
             break;
 
         case DHCPREQUEST://3
+            if (dhcps->opt_other_server) {
+                /* RFC 2131 4.3.2: servers not selected by the client MUST NOT respond */
+                s.state = DHCPS_STATE_IDLE;
+#if DHCPS_DEBUG
+                DHCPS_LOG("dhcps: DHCPREQUEST for another server, ignored\n");
+#endif
+                break;
+            }
+
             if (!(s.state == DHCPS_STATE_ACK || s.state == DHCPS_STATE_NAK)) {
                 if (dhcps->renew == true) {
                     s.state = DHCPS_STATE_ACK;
@@ -1005,6 +1057,7 @@ static s16_t parse_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t len)
         first_address.addr = dhcps->dhcps_poll.start_ip.addr;
         dhcps->client_address.addr = dhcps->client_address_plus.addr;
         dhcps->renew = false;
+        dhcps->alloc_new = false;
 
         if (dhcps->plist != NULL) {
             if (dhcps->has_declined_ip) {
@@ -1075,6 +1128,7 @@ static s16_t parse_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t len)
             pnode->pnode = pdhcps_pool;
             pnode->pnext = NULL;
             node_insert_to_list(&dhcps->plist, pnode);
+            dhcps->alloc_new = true;
 
             if (dhcps->client_address.addr == dhcps->dhcps_poll.end_ip.addr) {
                 dhcps->client_address_plus.addr = dhcps->dhcps_poll.start_ip.addr;
@@ -1099,12 +1153,19 @@ POOL_CHECK:
                 pdhcps_pool = NULL;
             }
 
+            /* pool exhausted: NAK; make sure the reply carries yiaddr 0 */
+            memset(&dhcps->client_address, 0x0, sizeof(dhcps->client_address));
             return 4;
         }
 
-        s16_t ret = parse_options(dhcps, &m->options[4], len);;
+        s16_t ret = parse_options(dhcps, &m->options[4], len);
 
-        if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK || ret ==  DHCPS_STATE_DECLINE) {
+        /* Drop the lease node on RELEASE / NAK / DECLINE, and also when a message we
+         * do not answer (unknown type, INFORM, REQUEST for another server, ...)
+         * came from a client that had no lease: the node was only allocated
+         * speculatively above and must not consume a pool address. */
+        if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK || ret ==  DHCPS_STATE_DECLINE ||
+            (ret == DHCPS_STATE_IDLE && dhcps->alloc_new)) {
             if (pnode != NULL) {
                 node_remove_from_list(&dhcps->plist, pnode);
                 mem_free(pnode);
