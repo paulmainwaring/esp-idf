@@ -100,6 +100,15 @@
 /* hold-down period of a withheld address, in dhcps_tmr ticks */
 #define DHCPS_HOLD_TICKS (CONFIG_LWIP_DHCPS_DECLINE_HOLD_SECS / DHCPS_COARSE_TIMER_SECS)
 
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+/* pre-offer ARP conflict probe: two requests, decision after the full window */
+#define DHCPS_PROBE_MAX       MAX_STATION_NUM
+#define DHCPS_PROBE_HALF_MS   (CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE_MS / 2)
+#define DHCPS_PROBE_NONE      0   /* send the OFFER now */
+#define DHCPS_PROBE_DEFERRED  1   /* probe pending, it owns the message */
+#define DHCPS_PROBE_CONFLICT  2   /* candidate withheld, re-run allocation */
+#endif
+
 #define DHCPS_STATE_OFFER 1
 #define DHCPS_STATE_DECLINE 2
 #define DHCPS_STATE_ACK 3
@@ -128,6 +137,19 @@ typedef struct {
 
 static const u32_t magic_cookie  = 0x63538263;
 
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+struct dhcps_probe {
+    struct dhcps_probe *next;
+    dhcps_t *dhcps;
+    struct dhcps_msg *msg;      /* owned copy of the DISCOVER */
+    u16_t msg_len;              /* allocated size of msg (what send_offer wants) */
+    u16_t opt_len;              /* options length (what parse_msg wants) */
+    ip4_addr_t ip;              /* candidate address being probed */
+    u8_t mac[6];                /* requesting client (chaddr) */
+    u8_t phase;                 /* 0 = first ARP request sent, 1 = second sent */
+};
+#endif
+
 struct dhcps_t {
     struct netif *dhcps_netif;
     ip4_addr_t broadcast_dhcps;
@@ -150,6 +172,10 @@ struct dhcps_t {
     bool alloc_new;             /* parse_msg() created a fresh lease node for the current message */
     ip4_addr_t opt_req_ip;      /* option 50 of the current message, 0 if absent */
     bool opt_other_server;      /* option 54 of the current message names another server */
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+    struct dhcps_probe *probes; /* pending pre-offer probes */
+    u8_t probe_count;
+#endif
 };
 
 
@@ -1333,6 +1359,247 @@ POOL_CHECK:
     return 0;
 }
 
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+static void dhcps_probe_tmr(void *arg);
+static bool dhcps_handle_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t msg_len, u16_t opt_len);
+
+/******************************************************************************
+ * FunctionName : dhcps_arp_conflict
+ * Description  : is there a STABLE ARP entry for ip from a host other than the
+ *                requesting client? (The client answering for an address it
+ *                already holds is not a conflict.)
+ * Parameters   : ip -- address to check
+ *                mac -- requesting client's MAC
+ *                eth_ret -- set to the other host's MAC on conflict
+ * Returns      : true on conflict
+*******************************************************************************/
+static bool dhcps_arp_conflict(dhcps_t *dhcps, const ip4_addr_t *ip, const u8_t *mac, struct eth_addr **eth_ret)
+{
+    struct eth_addr *eth = NULL;
+    const ip4_addr_t *ipr = NULL;
+
+    if (etharp_find_addr(dhcps->dhcps_netif, ip, &eth, &ipr) < 0) {
+        return false;
+    }
+
+    if (memcmp(eth->addr, mac, ETH_HWADDR_LEN) == 0) {
+        return false;
+    }
+
+    *eth_ret = eth;
+    return true;
+}
+
+static struct dhcps_probe *dhcps_probe_find_mac(dhcps_t *dhcps, const u8_t *mac)
+{
+    struct dhcps_probe *probe;
+
+    for (probe = dhcps->probes; probe != NULL; probe = probe->next) {
+        if (memcmp(probe->mac, mac, sizeof(probe->mac)) == 0) {
+            return probe;
+        }
+    }
+
+    return NULL;
+}
+
+static void dhcps_probe_unlink(dhcps_t *dhcps, struct dhcps_probe *probe)
+{
+    struct dhcps_probe **pp = &dhcps->probes;
+
+    while (*pp != NULL && *pp != probe) {
+        pp = &(*pp)->next;
+    }
+
+    if (*pp == probe) {
+        *pp = probe->next;
+        dhcps->probe_count--;
+    }
+}
+
+static void dhcps_probe_free(struct dhcps_probe *probe)
+{
+    mem_free(probe->msg);
+    mem_free(probe);
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_probe_cancel_all
+ * Description  : drop every pending probe (server stop / restart / delete)
+*******************************************************************************/
+static void dhcps_probe_cancel_all(dhcps_t *dhcps)
+{
+    struct dhcps_probe *probe = dhcps->probes;
+    struct dhcps_probe *next;
+
+    while (probe != NULL) {
+        next = probe->next;
+        sys_untimeout(dhcps_probe_tmr, probe);
+        dhcps_probe_free(probe);
+        probe = next;
+    }
+
+    dhcps->probes = NULL;
+    dhcps->probe_count = 0;
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_probe_start
+ * Description  : decide whether the candidate address in dhcps->client_address
+ *                (just allocated by parse_msg for this DISCOVER) must be
+ *                ARP-probed before it is offered
+ * Parameters   : m, msg_len, opt_len -- the DISCOVER (ownership taken on DEFERRED)
+ * Returns      : DHCPS_PROBE_NONE / DHCPS_PROBE_DEFERRED / DHCPS_PROBE_CONFLICT
+*******************************************************************************/
+static int dhcps_probe_start(dhcps_t *dhcps, struct dhcps_msg *m, u16_t msg_len, u16_t opt_len)
+{
+    struct netif *netif = dhcps->dhcps_netif;
+    struct dhcps_probe *probe;
+    struct eth_addr *holder = NULL;
+    struct dhcps_pool *pool;
+
+    probe = dhcps_probe_find_mac(dhcps, m->chaddr);
+
+    if (probe != NULL) {
+        /* DISCOVER retransmitted while its probe is pending: keep the newest
+         * copy (latest xid), keep waiting; one OFFER will be sent */
+        mem_free(probe->msg);
+        probe->msg = m;
+        probe->msg_len = msg_len;
+        probe->opt_len = opt_len;
+        return DHCPS_PROBE_DEFERRED;
+    }
+
+    if (!dhcps->alloc_new) {
+        /* client re-asks for the lease it already holds */
+        return DHCPS_PROBE_NONE;
+    }
+
+    if (netif == NULL || !netif_is_up(netif) || !(netif->flags & NETIF_FLAG_ETHARP) ||
+        dhcps->probe_count >= DHCPS_PROBE_MAX) {
+        return DHCPS_PROBE_NONE;
+    }
+
+    /* zero-cost check first: a stale holder that talks to us (we are its
+     * gateway) is already in the ARP table */
+    if (dhcps_arp_conflict(dhcps, &dhcps->client_address, m->chaddr, &holder)) {
+        pool = dhcps_pool_find_ip(dhcps, dhcps->client_address.addr);
+
+        if (pool != NULL) {
+            dhcps_pool_hold(dhcps, pool, holder->addr, "in use (ARP cache)");
+            return DHCPS_PROBE_CONFLICT;
+        }
+
+        return DHCPS_PROBE_NONE;
+    }
+
+    probe = (struct dhcps_probe *)mem_calloc(1, sizeof(struct dhcps_probe));
+
+    if (probe == NULL) {
+        return DHCPS_PROBE_NONE;
+    }
+
+    probe->dhcps = dhcps;
+    probe->msg = m;
+    probe->msg_len = msg_len;
+    probe->opt_len = opt_len;
+    probe->ip.addr = dhcps->client_address.addr;
+    memcpy(probe->mac, m->chaddr, sizeof(probe->mac));
+    probe->phase = 0;
+    probe->next = dhcps->probes;
+    dhcps->probes = probe;
+    dhcps->probe_count++;
+
+    /* sender = our own address; a holder's reply is addressed to us and lands
+     * in the ARP table where dhcps_arp_conflict() finds it */
+    etharp_request(netif, &probe->ip);
+    sys_timeout(DHCPS_PROBE_HALF_MS, dhcps_probe_tmr, probe);
+    return DHCPS_PROBE_DEFERRED;
+}
+
+/******************************************************************************
+ * FunctionName : dhcps_probe_tmr
+ * Description  : probe timer: send the second ARP request, then decide
+ * Parameters   : arg -- the probe record
+*******************************************************************************/
+static void dhcps_probe_tmr(void *arg)
+{
+    struct dhcps_probe *probe = arg;
+    dhcps_t *dhcps = probe->dhcps;
+    struct dhcps_msg *msg;
+    u16_t msg_len, opt_len;
+    ip4_addr_t ip;
+    u8_t mac[6];
+    list_node *pback_node = NULL;
+    struct dhcps_pool *pdhcps_pool = NULL;
+    struct dhcps_pool *pool = NULL;
+    struct eth_addr *holder = NULL;
+
+    if (dhcps->state != DHCPS_HANDLE_STARTED) {
+        /* stop / delete raced us */
+        dhcps_probe_unlink(dhcps, probe);
+        dhcps_probe_free(probe);
+        return;
+    }
+
+    if (probe->phase == 0) {
+        probe->phase = 1;
+        etharp_request(dhcps->dhcps_netif, &probe->ip);
+        sys_timeout(DHCPS_PROBE_HALF_MS, dhcps_probe_tmr, probe);
+        return;
+    }
+
+    /* decision: detach the record first, then act */
+    dhcps_probe_unlink(dhcps, probe);
+    msg = probe->msg;
+    msg_len = probe->msg_len;
+    opt_len = probe->opt_len;
+    ip = probe->ip;
+    memcpy(mac, probe->mac, sizeof(mac));
+    mem_free(probe);
+
+    if (!netif_is_up(dhcps->dhcps_netif)) {
+        mem_free(msg);
+        return;
+    }
+
+    /* the lease we are about to offer must still belong to this client */
+    for (pback_node = dhcps->plist; pback_node != NULL; pback_node = pback_node->pnext) {
+        pdhcps_pool = pback_node->pnode;
+
+        if (!(pdhcps_pool->flags & DHCPS_POOL_FLAG_HOLD) &&
+            memcmp(pdhcps_pool->mac, mac, sizeof(mac)) == 0) {
+            pool = pdhcps_pool;
+            break;
+        }
+    }
+
+    if (pool == NULL || pool->ip.addr != ip.addr) {
+        /* released / evicted meanwhile: the client will retry */
+        mem_free(msg);
+        return;
+    }
+
+    if (dhcps_arp_conflict(dhcps, &ip, mac, &holder)) {
+        dhcps_pool_hold(dhcps, pool, holder->addr, "in use (ARP)");
+
+        /* re-run allocation for this DISCOVER: next candidate, next probe */
+        if (!dhcps_handle_msg(dhcps, msg, msg_len, opt_len)) {
+            mem_free(msg);
+        }
+
+        return;
+    }
+
+#if DHCPS_DEBUG
+    DHCPS_LOG("dhcps: probe clear, sending deferred OFFER\n");
+#endif
+    dhcps->client_address.addr = ip.addr;   /* create_msg() reads it */
+    send_offer(dhcps, msg, msg_len);
+    mem_free(msg);
+}
+#endif /* CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE */
+
 /******************************************************************************
  * FunctionName : dhcps_handle_msg
  * Description  : run the server state machine for one received message and
@@ -1346,36 +1613,54 @@ POOL_CHECK:
 static bool dhcps_handle_msg(dhcps_t *dhcps, struct dhcps_msg *m, u16_t msg_len, u16_t opt_len)
 {
     s16_t state;
+    u16_t guard;
 
-    state = parse_msg(dhcps, m, opt_len);
+    /* bounded loop instead of recursion (small tcpip task stack): one extra
+     * pass per candidate the conflict probe withholds */
+    for (guard = 0; guard <= DHCPS_MAX_LEASE; guard++) {
+        state = parse_msg(dhcps, m, opt_len);
 #ifdef LWIP_HOOK_DHCPS_POST_STATE
-    state = LWIP_HOOK_DHCPS_POST_STATE(m, msg_len, state);
+        state = LWIP_HOOK_DHCPS_POST_STATE(m, msg_len, state);
 #endif /* LWIP_HOOK_DHCPS_POST_STATE */
 
-    switch (state) {
-        case DHCPS_STATE_OFFER://1
+        switch (state) {
+            case DHCPS_STATE_OFFER://1
 #if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_OFFER\n");
+                DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_OFFER\n");
 #endif
-            send_offer(dhcps, m, msg_len);
-            break;
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+                {
+                    int r = dhcps_probe_start(dhcps, m, msg_len, opt_len);
 
-        case DHCPS_STATE_ACK://3
+                    if (r == DHCPS_PROBE_DEFERRED) {
+                        return true;
+                    }
+
+                    if (r == DHCPS_PROBE_CONFLICT) {
+                        continue;   /* candidate withheld: allocate the next one */
+                    }
+                }
+#endif
+                send_offer(dhcps, m, msg_len);
+                return false;
+
+            case DHCPS_STATE_ACK://3
 #if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_ACK\n");
+                DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_ACK\n");
 #endif
-            send_ack(dhcps, m, msg_len);
-            break;
+                send_ack(dhcps, m, msg_len);
+                return false;
 
-        case DHCPS_STATE_NAK://4
+            case DHCPS_STATE_NAK://4
 #if DHCPS_DEBUG
-            DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_NAK\n");
+                DHCPS_LOG("dhcps: handle_dhcp-> DHCPD_STATE_NAK\n");
 #endif
-            send_nak(dhcps, m, msg_len);
-            break;
+                send_nak(dhcps, m, msg_len);
+                return false;
 
-        default :
-            break;
+            default :
+                return false;
+        }
     }
 
     return false;
@@ -1547,6 +1832,9 @@ err_t dhcps_start(dhcps_t *dhcps, struct netif *netif, ip4_addr_t ip)
         return ERR_ARG;
     }
     dhcps->dhcps_netif = netif;
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+    dhcps_probe_cancel_all(dhcps);
+#endif
     if (dhcps->dhcps_pcb != NULL) {
         udp_remove(dhcps->dhcps_pcb);
     }
@@ -1574,6 +1862,7 @@ err_t dhcps_start(dhcps_t *dhcps, struct netif *netif, ip4_addr_t ip)
     DHCPS_LOG("dhcps:dhcps_start->udp_recv function Set a receive callback handle_dhcp for UDP_PCB pcb_dhcps\n");
 #endif
     dhcps->state = DHCPS_HANDLE_STARTED;
+    sys_untimeout(dhcps_tmr, dhcps);   /* start without stop: do not arm a second timer */
     sys_timeout(DHCP_COARSE_TIMER_MSECS, dhcps_tmr, dhcps);
     return ERR_OK;
 }
@@ -1598,6 +1887,10 @@ err_t dhcps_stop(dhcps_t *dhcps, struct netif *netif)
         udp_remove(dhcps->dhcps_pcb);
         dhcps->dhcps_pcb = NULL;
     }
+
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+    dhcps_probe_cancel_all(dhcps);
+#endif
 
     list_node *pnode = NULL;
     list_node *pback_node = NULL;
@@ -1672,6 +1965,9 @@ static void dhcps_tmr(void *arg)
     dhcps_t *dhcps = arg;
     dhcps_handle_state state = dhcps->state;
     if (state == DHCPS_HANDLE_DELETE_PENDING) {
+#if CONFIG_LWIP_DHCPS_OFFER_ARP_PROBE
+        dhcps_probe_cancel_all(dhcps);
+#endif
         mem_free(dhcps);
         return;
     }

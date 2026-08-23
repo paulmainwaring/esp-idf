@@ -355,6 +355,32 @@ menu "LWIP"
                 marks the address as not available. It is excluded from allocation for
                 this many seconds and then becomes allocatable (and is probed) again.
 
+        config LWIP_DHCPS_OFFER_ARP_PROBE
+            bool "ARP-probe a newly allocated address before sending DHCPOFFER"
+            default y
+            depends on LWIP_DHCPS
+            help
+                RFC 2131 3.1 step 2: before offering a newly allocated address the
+                server sends two ARP requests for it and delays the DHCPOFFER by
+                LWIP_DHCPS_OFFER_ARP_PROBE_MS. If a host other than the requesting
+                client answers, the address is withheld for
+                LWIP_DHCPS_DECLINE_HOLD_SECS and the next free address is probed
+                instead. This is what protects against a server that rebooted (and
+                lost its lease table) re-offering an address a silent client still
+                holds. Addresses the requesting client already leases are offered
+                without delay.
+
+        config LWIP_DHCPS_OFFER_ARP_PROBE_MS
+            int "ARP probe window (ms)"
+            range 50 450
+            default 300
+            depends on LWIP_DHCPS_OFFER_ARP_PROBE
+            help
+                Total DHCPOFFER delay while probing (two ARP requests, the second
+                one half way through). Keep it below 500 ms: lwIP clients retransmit
+                DISCOVER after 500 ms and, with LWIP_DHCP_AUTOIP_COOP, start AutoIP
+                on the second one.
+
     endmenu # DHCPS
 
     menuconfig LWIP_AUTOIP
