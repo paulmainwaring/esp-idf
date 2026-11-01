@@ -10,6 +10,10 @@
 #include "esp_err.h"
 #include "driver/sdmmc_types.h"
 
+/* This fork waits for the card's transfer state after a read or write. The WiFiCube Mk2 firmware
+   checks for this define, as without that wait it gets intermittent SD write failures. */
+#define SDMMC_WAITS_FOR_TRANSFER_STATE 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
