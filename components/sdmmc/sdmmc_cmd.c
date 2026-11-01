@@ -386,6 +386,14 @@ esp_err_t sdmmc_send_cmd_send_status(sdmmc_card_t* card, uint32_t* out_status)
     return ESP_OK;
 }
 
+// A card can report READY_FOR_DATA while it is still programming, and it misses a command sent
+// then. It is only idle once it is back in the transfer state too.
+static bool sdmmc_ready_for_data(uint32_t status)
+{
+    return (status & MMC_R1_READY_FOR_DATA) &&
+           ((status & MMC_R1_CURRENT_STATE_MASK) >> MMC_R1_CURRENT_STATE_POS) == MMC_R1_CURRENT_STATE_TRAN;
+}
+
 esp_err_t sdmmc_write_sectors(sdmmc_card_t* card, const void* src,
         size_t start_block, size_t block_count)
 {
@@ -456,7 +464,7 @@ esp_err_t sdmmc_write_sectors_dma(sdmmc_card_t* card, const void* src,
     int64_t t0 = esp_timer_get_time();
     int64_t t1 = 0;
     /* SD mode: wait for the card to become idle based on R1 status */
-    while (!host_is_spi(card) && !(status & MMC_R1_READY_FOR_DATA)) {
+    while (!host_is_spi(card) && !sdmmc_ready_for_data(status)) {
         t1 = esp_timer_get_time();
         if (t1 - t0 > SDMMC_READY_FOR_DATA_TIMEOUT_US) {
             ESP_LOGE(TAG, "write sectors dma - timeout");
@@ -569,7 +577,7 @@ esp_err_t sdmmc_read_sectors_dma(sdmmc_card_t* card, void* dst,
     int64_t t0 = esp_timer_get_time();
     int64_t t1 = 0;
     /* SD mode: wait for the card to become idle based on R1 status */
-    while (!host_is_spi(card) && !(status & MMC_R1_READY_FOR_DATA)) {
+    while (!host_is_spi(card) && !sdmmc_ready_for_data(status)) {
         t1 = esp_timer_get_time();
         if (t1 - t0 > SDMMC_READY_FOR_DATA_TIMEOUT_US) {
             ESP_LOGE(TAG, "read sectors dma - timeout");
